@@ -115,8 +115,10 @@ def policy_loss(log_probs, advantages):
 
 
 if __name__ == '__main__':
-    
-    save_path = "./model_lstm_v2"
+    """
+    Test model without training
+    """
+    save_path = "./model_lstm"
     env = CarRacing(render_mode='human', continuous=False, domain_randomize=False, train_randomize=False)
     agent = Agent(in_channels=3, n_actions=5, input_dims=[80, 96], random_state_init=False).double()
     if os.path.exists(save_path):
@@ -124,7 +126,7 @@ if __name__ == '__main__':
         print("Model loaded!")
     
     stacked_image = None
-    optim = torch.optim.Adam(agent.parameters(), lr = 0.0005)
+   
     
    
  

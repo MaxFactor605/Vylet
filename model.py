@@ -1,6 +1,7 @@
 import torch 
 import torch.nn as nn 
 import torch.nn.functional as F
+import numpy as np
 
 class Agent(nn.Module):
     def __init__(self, in_channels=3, n_actions=5, linear_size=4*6*32, input_dims=[80, 96], random_state_init = False):
@@ -43,14 +44,14 @@ class Agent(nn.Module):
         x = F.relu(x, inplace=False)
         x = self.l2(x)
         x = F.relu(x, inplace=False)
-        if x.shape[0] > 1:
+        if x.shape[0] > 1: # When training process all sequence at once
             
             
             x, (h_0, c_0) = self.lstm(x)
             
    
 
-        else:
+        else: # When playing process frame by frame and save state beatween
             #x = x.unsqueeze(dim = 0)
          
             if self.hidden_state is None or self.cell_state is None:
@@ -63,10 +64,12 @@ class Agent(nn.Module):
            # x = self.hidden_state
 
         
-        #print(self.hidden_state)
-        #print(self.cell_state)
-        #print(self.hidden_state.shape)
-        #print(self.cell_state.shape)
+        if np.random.uniform(low = 0, high = 1) > 0.999:
+            
+            print("Hidden_state\t", self.hidden_state)
+            print("Cell_state\t", self.cell_state)
+       # print(self.hidden_state.shape)
+       # print(self.cell_state.shape)
         x = self.l3(x)
 
         x = F.softmax(x, dim=-1)

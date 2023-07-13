@@ -1,9 +1,9 @@
 import gymnasium as gym
 import torch
+import torch.nn as nn
 import numpy as np
 import os
 import matplotlib.pyplot as plt
-from pynput import keyboard
 from model import Agent
 from car_racing import CarRacing
 
@@ -62,11 +62,12 @@ def rgb2gray(rgb_img):
 
 
 STACK = False
-BATCH_SIZE = 1
+BATCH_SIZE = 1 
 GAMMA = 0.92
-MANUAL = False
-INPUT_NORM = False
+INPUT_NORM = True
 RANDOMIZE = False
+REWARD_NORM = False
+GRADIENT_CLIP = True
 
 
 def stack_image(stacked_image, new_image):
@@ -92,7 +93,7 @@ def compute_advantage(rewards, gamma, normalize=True):
     if normalize:
         mean = torch.mean(advantages)
         std = torch.std(advantages)
-        std = std if std > 0 else 1
+       # std = std if std != 0 else 1
         advantages = (advantages-mean)/std
     
     return advantages
@@ -106,18 +107,27 @@ def policy_loss(log_probs, advantages):
     #print(mean)
     return mean
 
+def orthogonal_init(layer):
+    if isinstance(layer, nn.Linear) or isinstance(layer, nn.Conv2d):
+        nn.init.orthogonal_(layer.weight)
+        layer.bias.data.fill_(0.0)
+
 
 if __name__ == '__main__':
-    
+    """
+    Training with just policy gradient 
+    """
     save_path = "./model_lstm"
     env = CarRacing(continuous=False, domain_randomize=False, train_randomize=RANDOMIZE)
     agent = Agent(in_channels=3, n_actions=5, input_dims=[80, 96], random_state_init=False).double()
     if os.path.exists(save_path):
         agent.load_state_dict(torch.load(save_path))
         print("Model loaded!")
-    
+    else:
+        agent.apply(orthogonal_init)
+
     stacked_image = None
-    optim = torch.optim.Adam(agent.parameters(), lr = 0.00001)
+    optim = torch.optim.Adam(agent.parameters(), lr = 0.0001)
     
     accum_rewards = []
     batch_disc_reward = []
@@ -157,7 +167,7 @@ if __name__ == '__main__':
             #action = torch.argmax(out)
             action_memory.append(action.item())
             if np.random.uniform(low = 0, high = 1) > 0.999:
-                print(out, action)
+                print("Probs\t", out, "Action: ", action.item())
         
             observation, reward, terminated, truncated, info = env.step(action.item())
             #print(t, reward)
@@ -168,7 +178,7 @@ if __name__ == '__main__':
             
         batch_states.extend(state_memory)
         batch_actions.extend(action_memory)
-        batch_disc_reward.extend(compute_advantage(torch.FloatTensor(reward_memory), GAMMA, False))
+        batch_disc_reward.extend(compute_advantage(torch.FloatTensor(reward_memory), GAMMA, REWARD_NORM))
         batch_counter += 1
 
         accum_rewards.append(sum(reward_memory))
@@ -190,7 +200,7 @@ if __name__ == '__main__':
             #print(action_tensor.shape)
             probs = agent(states_tensor)
 
-            probs = probs[torch.arange(probs.size(0)), action_tensor]
+            probs = probs[torch.arange(probs.size(0)), action_tensor] # Take probs of taken actions
             
             #print(probs)
             log_probs = torch.log(probs)
@@ -198,6 +208,9 @@ if __name__ == '__main__':
             loss = policy_loss(log_probs, reward_tensor)
             #print(loss)
             loss.backward()
+            if GRADIENT_CLIP:
+                torch.nn.utils.clip_grad_norm_(agent.parameters(), 1.0)
+
             optim.step()
             print("Batch completed! loss {}".format(loss))
 

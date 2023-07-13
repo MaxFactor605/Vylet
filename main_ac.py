@@ -110,7 +110,9 @@ def policy_loss(log_probs, advantages):
 
 
 if __name__ == '__main__':
-    
+    """
+    Training with advantage actor-critic algorithm
+    """
     save_path = "./model_a2c"
     env = CarRacing(continuous=False, domain_randomize=False, train_randomize=False)
     agent = Agent(in_channels=3, n_actions=5, input_dims=[80, 96], random_state_init=False).double()

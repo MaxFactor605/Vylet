@@ -68,6 +68,7 @@ class Car:
             print("\t Engine_power: {}, random_factor: {}".format(self.engine_power, self.random_factor_engine))
             print("\t wheel_moment_of_inertia: {}, random_factor: {}".format(self.wheel_moment_of_inertia, self.random_factor_wheel))
             print("\t friction_limit: {}, random_factor: {}".format(self.friction_limit, self.random_factor_friction))
+            
         self.hull: Box2D.b2Body = self.world.CreateDynamicBody(
             position=(init_x, init_y),
             angle=init_angle,
