@@ -64,9 +64,14 @@ def rgb2gray(rgb_img):
 
 
 STACK = False
-BATCH_SIZE = 1
-GAMMA = 0.99
-MANUAL = False
+BATCH_SIZE = 1 
+GAMMA = 0.92
+INPUT_NORM = True
+RANDOMIZE = False
+REWARD_NORM = False
+GRADIENT_CLIP = True
+
+
 def stack_image(stacked_image, new_image):
     new_image = new_image.squeeze(0)
     if(stacked_image is None):
@@ -109,6 +114,11 @@ def policy_loss(log_probs, advantages):
     return mean
 
 
+def orthogonal_init(layer):
+    if isinstance(layer, torch.nn.Linear) or isinstance(layer, torch.nn.Conv2d):
+        torch.nn.init.orthogonal_(layer.weight)
+        layer.bias.data.fill_(0.0)
+
 if __name__ == '__main__':
     """
     Training with advantage actor-critic algorithm
@@ -120,9 +130,13 @@ if __name__ == '__main__':
     if os.path.exists(save_path + "_agent"):
         agent.load_state_dict(torch.load(save_path+"_agent"))
         print("Agent loaded!")
+    else:
+        agent.apply(orthogonal_init)
     if os.path.exists(save_path + "_critic"):
         critic.load_state_dict(torch.load(save_path+"_critic"))
         print("Critic Loaded!")
+    else:
+        critic.apply(orthogonal_init)
 
     stacked_image = None
     optim_agent = torch.optim.Adam(agent.parameters(), lr = 0.05)
@@ -147,7 +161,10 @@ if __name__ == '__main__':
         for t in range(1000):
             observation = observation[:80]
             
-            observation = torch.tensor(observation).double()#/255
+            if INPUT_NORM:
+                observation = torch.tensor(observation).double()/255
+            else:
+                observation = torch.tensor(observation).double()
             
             if STACK:
                 observation = rgb2gray(observation)
@@ -212,7 +229,9 @@ if __name__ == '__main__':
 
             loss = loss_agent + loss_critic
             loss.backward()
-
+            if GRADIENT_CLIP:
+                torch.nn.utils.clip_grad_norm_(agent.parameters(), 1.0)
+                torch.nn.utils.clip_grad_norm_(critic.parameters(), 1.0)
             optim_critic.step()
             optim_agent.step()
 
