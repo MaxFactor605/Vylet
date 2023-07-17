@@ -4,7 +4,7 @@ import numpy as np
 import os
 import matplotlib.pyplot as plt
 from pynput import keyboard
-from model import Agent
+from model import Agent, AgentGRU, AgentLSTM, Critic, CriticGRU
 from car_racing import CarRacing
 
 
@@ -62,20 +62,14 @@ def rgb2gray(rgb_img):
 
 
 
-PRESSED_KEY = None
-def on_press(key):
-    global PRESSED_KEY
-    PRESSED_KEY = key.char
-    #print(key.char)
-def on_release(key):
-    global PRESSED_KEY
-    PRESSED_KEY = None
-
-
 STACK = False
-BATCH_SIZE = 1
-GAMMA = 0.99
-MANUAL = False
+BATCH_SIZE = 1 
+GAMMA = 0.92
+INPUT_NORM = True
+RANDOMIZE = False
+REWARD_NORM = False
+GRADIENT_CLIP = True
+
 def stack_image(stacked_image, new_image):
     new_image = new_image.squeeze(0)
     if(stacked_image is None):
@@ -118,13 +112,15 @@ if __name__ == '__main__':
     """
     Test model without training
     """
-    save_path = "./model_lstm"
+    save_path = "./model_a2c_step0"
     env = CarRacing(render_mode='human', continuous=False, domain_randomize=False, train_randomize=False)
     agent = Agent(in_channels=3, n_actions=5, input_dims=[80, 96], random_state_init=False).double()
-    if os.path.exists(save_path):
-        agent.load_state_dict(torch.load(save_path))
+    critic = Critic().double()
+    if os.path.exists(save_path + "_agent"):
+        agent.load_state_dict(torch.load(save_path + "_agent"))
         print("Model loaded!")
-    
+    if os.path.exists(save_path + "_critic"):
+        critic.load_state_dict(torch.load(save_path + "_critic"))
     stacked_image = None
    
     
@@ -133,29 +129,42 @@ if __name__ == '__main__':
     for episode in range(15000):
         observation, info = env.reset()
         agent.reset_state()
-        
+        critic.reset_state()
+
         for t in range(100):
             observation, reward, terminated, truncated, info = env.step(0)
         env.inactive_mult = 0
         for t in range(1000):
             observation = observation[:80]
             
+             
             observation = torch.tensor(observation).double()
             
             if STACK:
                 observation = rgb2gray(observation)
+                #plt.imshow(observation, cmap='gray', vmin=0, vmax=1)
+                #plt.show()
                 stacked_image = stack_image(stacked_image, observation).double()
+                if INPUT_NORM:
+                    stacked_image = stack_image(stacked_image, observation).double()/255
+                else:
+                    stacked_image = stack_image(stacked_image, observation).double()
                 out = agent(stacked_image.clone())
-                
+               # print(stacked_image)
+              
             else:
+                if INPUT_NORM:
+                    observation /= 255
                 out = agent(observation.clone())
+                v = critic(observation)
+          
                 
         
             action_dist = torch.distributions.Categorical(out)
             action = action_dist.sample()
             #action = torch.argmax(out)
            
-            print(out, action)
+            print(out, action.item(), v.item(), reward)
             
             observation, reward, terminated, truncated, info = env.step(action.item())
             #print(t, reward)

@@ -4,7 +4,7 @@ import torch.nn as nn
 import numpy as np
 import os
 import matplotlib.pyplot as plt
-from model import Agent
+from model import Agent, AgentGRU, AgentLSTM
 from car_racing import CarRacing
 
 
@@ -61,8 +61,8 @@ def rgb2gray(rgb_img):
     return gamma_compress(rgb2gray_linear(gamma_decompress(rgb_img)))
 
 
-STACK = False
-BATCH_SIZE = 1 
+STACK = True
+BATCH_SIZE = 1
 GAMMA = 0.92
 INPUT_NORM = True
 RANDOMIZE = False
@@ -117,9 +117,9 @@ if __name__ == '__main__':
     """
     Training with just policy gradient 
     """
-    save_path = "./model_lstm"
+    save_path = "./model_gru"
     env = CarRacing(continuous=False, domain_randomize=False, train_randomize=RANDOMIZE)
-    agent = Agent(in_channels=3, n_actions=5, input_dims=[80, 96], random_state_init=False).double()
+    agent = AgentGRU(in_channels=3, n_actions=5, input_dims=[80, 96], random_state_init=False).double()
     if os.path.exists(save_path):
         agent.load_state_dict(torch.load(save_path))
         print("Model loaded!")
@@ -127,7 +127,7 @@ if __name__ == '__main__':
         agent.apply(orthogonal_init)
 
     stacked_image = None
-    optim = torch.optim.Adam(agent.parameters(), lr = 0.0001)
+    optim = torch.optim.Adam(agent.parameters(), lr = 0.00001)
     
     accum_rewards = []
     batch_disc_reward = []
@@ -148,17 +148,23 @@ if __name__ == '__main__':
         for t in range(1000):
             observation = observation[:80]
             
-            if INPUT_NORM:
-                observation = torch.tensor(observation).double()/255
-            else:
-                observation = torch.tensor(observation).double()
+            observation = torch.tensor(observation).double()
             
             if STACK:
                 observation = rgb2gray(observation)
+                #plt.imshow(observation, cmap='gray', vmin=0, vmax=1)
+                #plt.show()
                 stacked_image = stack_image(stacked_image, observation).double()
+                if INPUT_NORM:
+                    stacked_image = stack_image(stacked_image, observation).double()/255
+                else:
+                    stacked_image = stack_image(stacked_image, observation).double()
                 out = agent(stacked_image.clone())
+               # print(stacked_image)
                 state_memory.append(stacked_image)
             else:
+                if INPUT_NORM:
+                    observation /= 255
                 out = agent(observation.clone())
                 state_memory.append(observation)
         
@@ -209,7 +215,7 @@ if __name__ == '__main__':
             #print(loss)
             loss.backward()
             if GRADIENT_CLIP:
-                torch.nn.utils.clip_grad_norm_(agent.parameters(), 1.0)
+                torch.nn.utils.clip_grad_norm_(agent.parameters(), 1.5)
 
             optim.step()
             print("Batch completed! loss {}".format(loss))
@@ -226,4 +232,6 @@ if __name__ == '__main__':
         
          
 
+# Save internal states before each step, for batch learning 
+# PPO algorithm 
 

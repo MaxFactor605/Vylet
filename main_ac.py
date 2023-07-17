@@ -84,13 +84,13 @@ def stack_image(stacked_image, new_image):
 
 
 
-def compute_advantage(rewards, gamma, normalize=True):
+def compute_advantage(rewards, Qval, gamma, normalize=True):
 
     advantages = torch.zeros_like(rewards)
-    R = 0
+    
     for t in reversed(range(len(rewards))):
-        R = rewards[t] + gamma * R
-        advantages[t] = R
+        Qval = rewards[t] + gamma * Qval
+        advantages[t] = Qval
     
     if normalize:
         mean = torch.mean(advantages)
@@ -127,20 +127,20 @@ if __name__ == '__main__':
     env = CarRacing(continuous=False, domain_randomize=False, train_randomize=False)
     agent = Agent(in_channels=3, n_actions=5, input_dims=[80, 96], random_state_init=False).double()
     critic = Critic().double()
-    if os.path.exists(save_path + "_agent"):
-        agent.load_state_dict(torch.load(save_path+"_agent"))
+    if os.path.exists(save_path + "_agent_v1"):
+        agent.load_state_dict(torch.load(save_path+"_agent_v1"))
         print("Agent loaded!")
     else:
         agent.apply(orthogonal_init)
-    if os.path.exists(save_path + "_critic"):
-        critic.load_state_dict(torch.load(save_path+"_critic"))
+    if os.path.exists(save_path + "_critic_v1"):
+        critic.load_state_dict(torch.load(save_path+"_critic_v1"))
         print("Critic Loaded!")
     else:
         critic.apply(orthogonal_init)
 
     stacked_image = None
-    optim_agent = torch.optim.Adam(agent.parameters(), lr = 0.05)
-    optim_critic = torch.optim.Adam(critic.parameters(), lr = 0.05)
+    optim_agent = torch.optim.Adam(agent.parameters(), lr = 0.00009)
+    optim_critic = torch.optim.Adam(critic.parameters(), lr = 0.00007)
 
     accum_rewards = []
     batch_disc_reward = []
@@ -161,17 +161,23 @@ if __name__ == '__main__':
         for t in range(1000):
             observation = observation[:80]
             
-            if INPUT_NORM:
-                observation = torch.tensor(observation).double()/255
-            else:
-                observation = torch.tensor(observation).double()
+            observation = torch.tensor(observation).double()
             
             if STACK:
                 observation = rgb2gray(observation)
+                #plt.imshow(observation, cmap='gray', vmin=0, vmax=1)
+                #plt.show()
                 stacked_image = stack_image(stacked_image, observation).double()
+                if INPUT_NORM:
+                    stacked_image = stack_image(stacked_image, observation).double()/255
+                else:
+                    stacked_image = stack_image(stacked_image, observation).double()
                 out = agent(stacked_image.clone())
+               # print(stacked_image)
                 state_memory.append(stacked_image)
             else:
+                if INPUT_NORM:
+                    observation /= 255
                 out = agent(observation.clone())
                 state_memory.append(observation)
         
@@ -181,6 +187,7 @@ if __name__ == '__main__':
             action_memory.append(action.item())
             if np.random.uniform(low = 0, high = 1) > 0.999:
                 print(out, action)
+                print(critic(observation))
            
 
             observation, reward, terminated, truncated, info = env.step(action.item())
@@ -189,10 +196,29 @@ if __name__ == '__main__':
             
             if terminated or truncated:
                 break
+        observation = observation[:80] 
+        observation = torch.tensor(observation).double()
             
+        if STACK:
+            observation = rgb2gray(observation)
+            #plt.imshow(observation, cmap='gray', vmin=0, vmax=1)
+            #plt.show()
+            stacked_image = stack_image(stacked_image, observation).double()
+            if INPUT_NORM:
+                stacked_image = stack_image(stacked_image, observation).double()/255
+            else:
+                stacked_image = stack_image(stacked_image, observation).double()
+            Qval = critic(stacked_image)
+            Qval = Qval.detach()
+        else:
+            if INPUT_NORM:
+                observation /= 255
+            Qval = critic(observation)
+            Qval = Qval.detach()
+
         batch_states.extend(state_memory)
         batch_actions.extend(action_memory)
-        batch_disc_reward.extend(compute_advantage(torch.FloatTensor(reward_memory), GAMMA, False))
+        batch_disc_reward.extend(compute_advantage(torch.FloatTensor(reward_memory), Qval, GAMMA, False))
         batch_counter += 1
 
         accum_rewards.append(sum(reward_memory))
@@ -219,7 +245,7 @@ if __name__ == '__main__':
             log_probs = torch.log(probs)
             
             values = critic(states_tensor)
-            values = values.detach()
+            
             reward_tensor = reward_tensor - values
 
             loss_agent = policy_loss(log_probs, reward_tensor)
@@ -230,8 +256,8 @@ if __name__ == '__main__':
             loss = loss_agent + loss_critic
             loss.backward()
             if GRADIENT_CLIP:
-                torch.nn.utils.clip_grad_norm_(agent.parameters(), 1.0)
-                torch.nn.utils.clip_grad_norm_(critic.parameters(), 1.0)
+                torch.nn.utils.clip_grad_norm_(agent.parameters(), 1.5)
+                torch.nn.utils.clip_grad_norm_(critic.parameters(), 1.5)
             optim_critic.step()
             optim_agent.step()
 
@@ -242,8 +268,8 @@ if __name__ == '__main__':
             batch_disc_reward = []
             batch_counter = 0
 
-            torch.save(agent.state_dict(), save_path + "_agent")
-            torch.save(critic.state_dict(), save_path + "_critic")
+            torch.save(agent.state_dict(), save_path + "_agent_v2")
+            torch.save(critic.state_dict(), save_path + "_critic_v2")
             print("Model saved!")
             
         

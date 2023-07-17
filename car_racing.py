@@ -88,7 +88,7 @@ class FrictionDetector(contactListener):
             obj.tiles.add(tile)
             if not tile.road_visited:
                 tile.road_visited = True
-                self.env.reward += (1000.0 / len(self.env.track)) # Here control reward for each tile
+                self.env.reward += (1000.0 / len(self.env.track))*2 # Here control reward for each tile
                 self.env.tile_visited_count += 1
 
                 # Lap is considered completed if enough % of the track was covered
@@ -573,7 +573,7 @@ class CarRacing(gym.Env, EzPickle):
         terminated = False
         truncated = False
         if action is not None:  # First step without action, called from reset()
-            self.reward -= 0.1
+            self.reward -= 0
             # We actually don't want to count fuel spent, we want car to be faster.
             # self.reward -=  10 * self.car.fuel_spent / ENGINE_POWER
             self.car.fuel_spent = 0.0
@@ -608,15 +608,15 @@ class CarRacing(gym.Env, EzPickle):
             sin_y = math.sqrt(1-cos_y**2)
             h = z*sin_y
             #print(h)
-            step_reward -= h/10 - 0.1 # Penalizing for getting out of road center
+            step_reward -= h # Penalizing for getting out of road center
 
             if(h > 1.5*TRACK_WIDTH):
-                step_reward -= 10
+                step_reward -= 100
                 terminated = True
 
             # Penalize if car position doesn't change
-            if (x > self.prev_x - 0.02 and x < self.prev_x + 0.02 and y > self.prev_y - 0.02 and y < self.prev_y + 0.02):
-                self.inactive_mult += 0.03
+            if (x > self.prev_x - 0.05 and x < self.prev_x + 0.05 and y > self.prev_y - 0.05 and y < self.prev_y + 0.05):
+                self.inactive_mult += 0.01
             else:
                 self.inactive_mult = 0
 
