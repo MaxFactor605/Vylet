@@ -4,7 +4,7 @@ import numpy as np
 import os
 import matplotlib.pyplot as plt
 from pynput import keyboard
-from model import Agent, Critic
+from model import Agent, Critic, AgentGRU
 from car_racing import CarRacing
 
 
@@ -65,7 +65,7 @@ def rgb2gray(rgb_img):
 
 STACK = False
 BATCH_SIZE = 1 
-GAMMA = 0.92
+GAMMA = 0.99
 INPUT_NORM = True
 RANDOMIZE = False
 REWARD_NORM = False
@@ -123,9 +123,9 @@ if __name__ == '__main__':
     """
     Training with advantage actor-critic algorithm
     """
-    save_path = "./model_a2c"
+    save_path = "./model_a2c_gru"
     env = CarRacing(continuous=False, domain_randomize=False, train_randomize=False)
-    agent = Agent(in_channels=3, n_actions=5, input_dims=[80, 96], random_state_init=False).double()
+    agent = AgentGRU(in_channels=3, n_actions=5, input_dims=[80, 96], random_state_init=False).double()
     critic = Critic().double()
     if os.path.exists(save_path + "_agent_v1"):
         agent.load_state_dict(torch.load(save_path+"_agent_v1"))
@@ -139,8 +139,8 @@ if __name__ == '__main__':
         critic.apply(orthogonal_init)
 
     stacked_image = None
-    optim_agent = torch.optim.Adam(agent.parameters(), lr = 0.00009)
-    optim_critic = torch.optim.Adam(critic.parameters(), lr = 0.00007)
+    optim_agent = torch.optim.Adam(agent.parameters(), lr = 0.000001)
+    optim_critic = torch.optim.Adam(critic.parameters(), lr = 0.000001)
 
     accum_rewards = []
     batch_disc_reward = []
@@ -158,7 +158,7 @@ if __name__ == '__main__':
         for t in range(50):
             observation, reward, terminated, truncated, info = env.step(0)
         env.inactive_mult = 0
-        for t in range(1000):
+        for t in range(500):
             observation = observation[:80]
             
             observation = torch.tensor(observation).double()

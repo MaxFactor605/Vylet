@@ -5,7 +5,7 @@ import numpy as np
 import os
 import matplotlib.pyplot as plt
 from pynput import keyboard
-from model import Agent, Critic, AgentGRU, CriticGRU
+from model import Agent, Critic, AgentGRU, CriticGRU, AgentGRUCont, AgentCont
 from car_racing import CarRacing
 
 
@@ -71,6 +71,7 @@ INPUT_NORM = True
 RANDOMIZE = False
 REWARD_NORM = False
 GRADIENT_CLIP = True
+CONTINUOUS = True
 
 
 def stack_image(stacked_image, new_image):
@@ -118,26 +119,32 @@ if __name__ == '__main__':
     Training with advantage actor-critic algorithm
     """
     torch.autograd.set_detect_anomaly(True)
-    save_path = "./model_a2c_step0"
-    env = CarRacing(continuous=False, domain_randomize=False, train_randomize=False)
-    agent = Agent(in_channels=3, n_actions=5, input_dims=[80, 96], random_state_init=False).double()
+    save_path = "./model_a2c_step_cont"
+    version_suff = '_v1'
+    version_suff_save = '_v2'
+    env = CarRacing(continuous=CONTINUOUS, domain_randomize=False, train_randomize=False)
+    if CONTINUOUS:
+        agent = AgentCont(in_channels=3, n_actions=5, input_dims=[80, 96], random_state_init=False).double()
+    else:
+
+        agent = AgentGRU(in_channels=3, n_actions=5, input_dims=[80, 96], random_state_init=False).double()
     critic = Critic().double()
     agent.train()
     critic.train()
-    if os.path.exists(save_path + "_agent"):
-        agent.load_state_dict(torch.load(save_path+"_agent"))
+    if os.path.exists(save_path + "_agent" + version_suff):
+        agent.load_state_dict(torch.load(save_path+"_agent" + version_suff))
         print("Agent loaded!")
     else:
         agent.apply(orthogonal_init)
-    if os.path.exists(save_path + "_critic"):
-        critic.load_state_dict(torch.load(save_path+"_critic"))
+    if os.path.exists(save_path + "_critic" + version_suff):
+        critic.load_state_dict(torch.load(save_path+"_critic" + version_suff))
         print("Critic Loaded!")
     else:
         critic.apply(orthogonal_init)
 
     stacked_image = None
-    optim_agent = torch.optim.Adam(agent.parameters(), lr = 0.000001)
-    optim_critic = torch.optim.Adam(critic.parameters(), lr = 0.000001)
+    optim_agent = torch.optim.Adam(agent.parameters(), lr = 0.0000001)
+    optim_critic = torch.optim.Adam(critic.parameters(), lr = 0.0000001)
 
     
     for episode in range(15000):
@@ -147,7 +154,7 @@ if __name__ == '__main__':
         score = 0
         I = 1
         for t in range(50):
-            observation, reward, terminated, truncated, info = env.step(0)
+            observation, reward, terminated, truncated, info = env.step([0,0,0] if CONTINUOUS else 0)
         env.inactive_mult = 0
         observation = observation[:80]
         observation = torch.tensor(observation).double()
@@ -166,21 +173,39 @@ if __name__ == '__main__':
                 observation = observation/255
             #out = agent(observation.clone())
 
-        for t in range(1000):
+        for t in range(1500):
             
             if STACK:
-                out = agent(stacked_image)
+                if CONTINUOUS:
+                    means, stds = agent(stacked_image)
+                else:
+                    out = agent(stacked_image)
             else:
-                out = agent(observation.clone())
-            action_dist = torch.distributions.Categorical(out)
-            action = action_dist.sample()
-            #action = torch.argmax(out)
-            if np.random.uniform(low = 0, high = 1) > 0.999:
-                print(out, action)
-                print(critic(observation))
+                if CONTINUOUS:
+                    means, stds = agent(observation.clone())
+                else:
+                    out = agent(observation.clone())
+            
+            if CONTINUOUS:
+                actions_ = torch.normal(means, stds)
+                actions = []
+                actions.append(torch.clip(actions_[0, 0], min = 0, max = 1).item())
+                actions.append(torch.clip(actions_[0, 1], min = -1, max = 1).item())
+                actions.append(torch.clip(actions_[0, 2], min = 0, max = 1).item())
+                if np.random.uniform(low = 0, high = 1) > 0.999:
+                    print(means)
+                    print(stds)
+                    print(actions, actions_)
+            else:
+                action_dist = torch.distributions.Categorical(out)
+                action = action_dist.sample()
+                #action = torch.argmax(out)
+                if np.random.uniform(low = 0, high = 1) > 0.999:
+                    print(out, action)
+                    print(critic(observation))
            
 
-            new_observation, reward, terminated, truncated, info = env.step(action.item())
+            new_observation, reward, terminated, truncated, info = env.step(actions if CONTINUOUS else action.item())
             new_observation = new_observation[:80]
             new_observation = torch.tensor(new_observation).double()
             score += reward
@@ -201,7 +226,7 @@ if __name__ == '__main__':
                     new_observation = new_observation / 255
                 v_next = critic(new_observation)[0]
             
-            if terminated or truncated or t == 999:
+            if terminated or truncated or t == 499:
                 v_next = torch.tensor([0]).double()
             v = critic(observation.clone())[0]
 
@@ -209,7 +234,12 @@ if __name__ == '__main__':
             #critic_loss =  critic_loss * I
             
             delta = reward + GAMMA * v_next.item() - v.item()
-            policy_loss = -torch.log(out[0, action.item()])
+            if CONTINUOUS:
+                policy_loss = -torch.log( (1/(stds * torch.sqrt(torch.Tensor([2 * torch.pi])))) * torch.exp( (-1/2) * torch.pow( (actions_ - means)/stds, 2 )) )
+                policy_loss = torch.sum(policy_loss)
+            else:
+                policy_loss = -torch.log(out[0, action.item()])
+
             policy_loss = policy_loss * delta
            # policy_loss = policy_loss * I
 
@@ -217,14 +247,14 @@ if __name__ == '__main__':
             optim_agent.zero_grad()
             policy_loss.backward(retain_graph = True)
             if GRADIENT_CLIP:
-                torch.nn.utils.clip_grad_norm_(agent.parameters(), 1.0)
+                torch.nn.utils.clip_grad_norm_(agent.parameters(), 1.5)
                 
             optim_agent.step()
 
             optim_critic.zero_grad()
             critic_loss.backward(retain_graph = True)
             if GRADIENT_CLIP:
-                torch.nn.utils.clip_grad_norm_(critic.parameters(), 1.0)
+                torch.nn.utils.clip_grad_norm_(critic.parameters(), 1.5)
             optim_critic.step()
 
             I *= GAMMA
@@ -233,5 +263,5 @@ if __name__ == '__main__':
             if terminated or truncated:
                 break
         print("Episode {}: score: {}".format(episode, score))
-        torch.save(agent.state_dict(), save_path+"_agent")
-        torch.save(critic.state_dict(), save_path+"_critic")
+        torch.save(agent.state_dict(), save_path+"_agent" + version_suff_save)
+        torch.save(critic.state_dict(), save_path+"_critic" + version_suff_save)

@@ -61,9 +61,9 @@ def rgb2gray(rgb_img):
     return gamma_compress(rgb2gray_linear(gamma_decompress(rgb_img)))
 
 
-STACK = True
+STACK = False
 BATCH_SIZE = 1
-GAMMA = 0.92
+GAMMA = 0.99
 INPUT_NORM = True
 RANDOMIZE = False
 REWARD_NORM = False
@@ -117,7 +117,7 @@ if __name__ == '__main__':
     """
     Training with just policy gradient 
     """
-    save_path = "./model_gru"
+    save_path = "./model_gru_v1"
     env = CarRacing(continuous=False, domain_randomize=False, train_randomize=RANDOMIZE)
     agent = AgentGRU(in_channels=3, n_actions=5, input_dims=[80, 96], random_state_init=False).double()
     if os.path.exists(save_path):
@@ -127,7 +127,7 @@ if __name__ == '__main__':
         agent.apply(orthogonal_init)
 
     stacked_image = None
-    optim = torch.optim.Adam(agent.parameters(), lr = 0.00001)
+    optim = torch.optim.Adam(agent.parameters(), lr = 0.0005)
     
     accum_rewards = []
     batch_disc_reward = []
@@ -145,7 +145,7 @@ if __name__ == '__main__':
         for t in range(50):
             observation, reward, terminated, truncated, info = env.step(0)
         env.inactive_mult = 0
-        for t in range(1000):
+        for t in range(500):
             observation = observation[:80]
             
             observation = torch.tensor(observation).double()
@@ -225,7 +225,7 @@ if __name__ == '__main__':
             batch_disc_reward = []
             batch_counter = 0
 
-            torch.save(agent.state_dict(), save_path)
+            torch.save(agent.state_dict(), save_path[:-3]+"_v2")
             print("Model saved!")
             
         

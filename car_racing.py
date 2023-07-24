@@ -39,7 +39,7 @@ SCALE = 6.0  # Track scale
 TRACK_RAD = 900 / SCALE  # Track is heavily morphed circle with this radius
 PLAYFIELD = 2000 / SCALE  # Game over boundary
 FPS = 50  # Frames per second
-ZOOM = 2.7  # Camera zoom
+ZOOM = 2.7 # Camera zoom
 ZOOM_FOLLOW = True  # Set to False for fixed view (don't use zoom)
 
 
@@ -297,13 +297,15 @@ class CarRacing(gym.Env, EzPickle):
 
     def _create_track(self):
         CHECKPOINTS = 12
-
+        
         # Create checkpoints
         checkpoints = []
         for c in range(CHECKPOINTS):
-            noise = self.np_random.uniform(0, 2 * math.pi * 1 / CHECKPOINTS)
+            #noise = self.np_random.uniform(0, 2 * math.pi * 1 / CHECKPOINTS)
+            noise =  math.pi * 1 / CHECKPOINTS
             alpha = 2 * math.pi * c / CHECKPOINTS + noise
-            rad = self.np_random.uniform(TRACK_RAD / 3, TRACK_RAD)
+            #rad = self.np_random.uniform(TRACK_RAD / 3, TRACK_RAD)
+            rad = TRACK_RAD
 
             if c == 0:
                 alpha = 0
@@ -541,27 +543,31 @@ class CarRacing(gym.Env, EzPickle):
         assert self.car is not None
         if action is not None:
             
-            
-            if not self.action_space.contains(action):
-                raise InvalidAction(
-                    f"you passed the invalid action `{action}`. "
-                    f"The supported action_space is `{self.action_space}`"
-                )
-            
-            if action == self.prev_action and self.continuous:
-                self.action_mult += 1
+            if self.continuous:
+                self.car.steer(action[1])
+                self.car.gas(action[0])
+                self.car.brake(action[2])
             else:
-                self.action_mult = 1
+                if not self.action_space.contains(action):
+                    raise InvalidAction(
+                        f"you passed the invalid action `{action}`. "
+                        f"The supported action_space is `{self.action_space}`"
+                    )
+            
+                if action == self.prev_action and self.continuous:
+                    self.action_mult += 1
+                else:
+                    self.action_mult = 1
 
-            #print(self.action_mult)
-            self.car_steer_angle = (-self.base_step * (action == 1) + self.base_step * (action == 2)) * self.action_mult
-            #print(self.car_steer_angle)
-            self.car_steer_angle = np.clip(self.car_steer_angle, -1, 1)
+                #print(self.action_mult)
+                self.car_steer_angle = (-self.base_step * (action == 1) + self.base_step * (action == 2)) * self.action_mult
+                #print(self.car_steer_angle)
+                self.car_steer_angle = np.clip(self.car_steer_angle, -1, 1)
 
-            self.car.steer(self.car_steer_angle)
-            self.car.gas(self.base_step * self.action_mult * (action == 3))
-            self.car.brake(self.base_step * self.action_mult * (action == 4))
-            self.prev_action = action
+                self.car.steer(self.car_steer_angle)
+                self.car.gas(self.base_step * self.action_mult * (action == 3))
+                self.car.brake(self.base_step * self.action_mult * (action == 4))
+                self.prev_action = action
 
         self.car.step(1.0 / FPS)
         self.world.Step(1.0 / FPS, 6 * 30, 2 * 30)
@@ -601,29 +607,29 @@ class CarRacing(gym.Env, EzPickle):
                     min_dist2 = [dist, tile[2], tile[3]]
             
             # Computing distance from road center
-            y = min_dist[0]
-            z = min_dist2[0]
-            x = math.sqrt((min_dist[1] - min_dist2[1]) ** 2 + (min_dist[2] - min_dist2[2]) ** 2)
-            cos_y = (x**2+z**2-y**2)/(2*x*z)
+            y_ = min_dist[0]
+            z_ = min_dist2[0]
+            x_ = math.sqrt((min_dist[1] - min_dist2[1]) ** 2 + (min_dist[2] - min_dist2[2]) ** 2)
+            cos_y = (x_**2+z_**2-y_**2)/(2*x_*z_)
             sin_y = math.sqrt(1-cos_y**2)
-            h = z*sin_y
-            #print(h)
-            step_reward -= h # Penalizing for getting out of road center
-
+            h = z_*sin_y
+            
+            step_reward -= h/2 # Penalizing for getting out of road center
+            
             if(h > 1.5*TRACK_WIDTH):
                 step_reward -= 100
                 terminated = True
-
+            #print("X: {} Y: {} prev_X: {} prev_Y: {} h: {}".format(x, y, self.prev_x, self.prev_y, h))
             # Penalize if car position doesn't change
-            if (x > self.prev_x - 0.05 and x < self.prev_x + 0.05 and y > self.prev_y - 0.05 and y < self.prev_y + 0.05):
-                self.inactive_mult += 0.01
+            if (math.fabs(x - self.prev_x) < 0.1 and math.fabs(y - self.prev_y) < 0.1):
+                self.inactive_mult += 0.1
             else:
                 self.inactive_mult = 0
 
             step_reward -= self.inactive_mult
             self.prev_x = x
             self.prev_y = y
-                
+            
             
 
         if self.render_mode == "human":

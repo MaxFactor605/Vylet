@@ -4,7 +4,7 @@ import numpy as np
 import os
 import matplotlib.pyplot as plt
 from pynput import keyboard
-from model import Agent, AgentGRU, AgentLSTM, Critic, CriticGRU
+from model import Agent, AgentGRU, AgentLSTM, Critic, CriticGRU, AgentGRUCont, AgentCont
 from car_racing import CarRacing
 
 
@@ -69,6 +69,8 @@ INPUT_NORM = True
 RANDOMIZE = False
 REWARD_NORM = False
 GRADIENT_CLIP = True
+CONTINUOUS = False
+PLOT = False
 
 def stack_image(stacked_image, new_image):
     new_image = new_image.squeeze(0)
@@ -107,24 +109,45 @@ def policy_loss(log_probs, advantages):
     #print(mean)
     return mean
 
+def orthogonal_init(layer):
+    if isinstance(layer, torch.nn.Linear) or isinstance(layer, torch.nn.Conv2d):
+        torch.nn.init.orthogonal_(layer.weight)
+        layer.bias.data.fill_(0.0)
+
+
+def normal_dist(x, mean, std):
+    return  (1/(std*np.sqrt(2 * np.pi))) * np.exp((-1/2) * np.power((x - mean)/std, 2))
 
 if __name__ == '__main__':
     """
     Test model without training
     """
-    save_path = "./model_a2c_step0"
-    env = CarRacing(render_mode='human', continuous=False, domain_randomize=False, train_randomize=False)
-    agent = Agent(in_channels=3, n_actions=5, input_dims=[80, 96], random_state_init=False).double()
-    critic = Critic().double()
-    if os.path.exists(save_path + "_agent"):
-        agent.load_state_dict(torch.load(save_path + "_agent"))
-        print("Model loaded!")
-    if os.path.exists(save_path + "_critic"):
-        critic.load_state_dict(torch.load(save_path + "_critic"))
-    stacked_image = None
-   
+    save_path = "./model_a2c_step_gru"
+    version_suff = '_v11'
     
-   
+    env = CarRacing(render_mode='human',continuous=CONTINUOUS, domain_randomize=False, train_randomize=False)
+    if CONTINUOUS:
+        agent = AgentCont(in_channels=3, n_actions=5, input_dims=[80, 96], random_state_init=False).double()
+    else:
+
+        agent = AgentGRU(in_channels=3, n_actions=5, input_dims=[80, 96], random_state_init=False).double()
+    critic = Critic().double()
+    
+    if os.path.exists(save_path + "_agent" + version_suff):
+        agent.load_state_dict(torch.load(save_path+"_agent" + version_suff))
+        print("Agent loaded!")
+    else:
+        agent.apply(orthogonal_init)
+    if os.path.exists(save_path + "_critic" + version_suff):
+        critic.load_state_dict(torch.load(save_path+"_critic" + version_suff))
+        print("Critic Loaded!")
+    else:
+        critic.apply(orthogonal_init)
+
+    if PLOT: 
+        plt.figure(figsize=(9,3))
+        x = np.arange(-1.5, 1.5, 0.1)
+        x_ = np.arange(0, 1.5, 0.1)
  
     for episode in range(15000):
         observation, info = env.reset()
@@ -132,9 +155,9 @@ if __name__ == '__main__':
         critic.reset_state()
 
         for t in range(100):
-            observation, reward, terminated, truncated, info = env.step(0)
+            observation, reward, terminated, truncated, info = env.step([0,0,0] if CONTINUOUS else 0)
         env.inactive_mult = 0
-        for t in range(1000):
+        for t in range(5000):
             observation = observation[:80]
             
              
@@ -149,24 +172,56 @@ if __name__ == '__main__':
                     stacked_image = stack_image(stacked_image, observation).double()/255
                 else:
                     stacked_image = stack_image(stacked_image, observation).double()
-                out = agent(stacked_image.clone())
+                if CONTINUOUS:
+                    means, stds = agent(stacked_image.clone())
+                else:
+                    out = agent(stacked_image.clone())
                # print(stacked_image)
               
             else:
                 if INPUT_NORM:
                     observation /= 255
-                out = agent(observation.clone())
+                if CONTINUOUS:
+                    means, stds = agent(observation.clone())
+                    print(means, stds, reward)
+                else:
+                    out = agent(observation.clone())
                 v = critic(observation)
           
                 
         
-            action_dist = torch.distributions.Categorical(out)
-            action = action_dist.sample()
-            #action = torch.argmax(out)
-           
-            print(out, action.item(), v.item(), reward)
+            if CONTINUOUS:
+                actions_ = torch.normal(means, stds)
+                actions = []
+                actions.append(torch.clip(actions_[0, 0], min = 0, max = 1).item())
+                actions.append(torch.clip(actions_[0, 1], min = -1, max = 1).item())
+                actions.append(torch.clip(actions_[0, 2], min = 0, max = 1).item())
+                print(actions)
+                
+            else:
+                action_dist = torch.distributions.Categorical(out)
+                action = action_dist.sample()
+                #action = torch.argmax(out)
+                
+            if PLOT:
+                plt.clf()
+                g = normal_dist(x_, means[0, 0].item(), stds[0, 0].item())
+                s = normal_dist(x, means[0, 1].item(), stds[0, 1].item())
+                b = normal_dist(x_, means[0, 2].item(), stds[0, 2].item())
+                plt.subplot(131)
+                plt.title("Gas")
+                plt.plot(x_, g)
+                plt.subplot(132)
+                plt.title("Steer")
+                plt.plot(x, s)
+                plt.subplot(133)
+                plt.title("Brake")
+                plt.plot(x_, b)
+                plt.pause(0.1)
+            if not CONTINUOUS:
+                print(out, action.item(), v.item(), reward)
             
-            observation, reward, terminated, truncated, info = env.step(action.item())
+            observation, reward, terminated, truncated, info = env.step(actions if CONTINUOUS else action.item())
             #print(t, reward)
             
             
