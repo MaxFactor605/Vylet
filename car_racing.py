@@ -38,7 +38,7 @@ WINDOW_H = 800
 SCALE = 6.0  # Track scale
 TRACK_RAD = 900 / SCALE  # Track is heavily morphed circle with this radius
 PLAYFIELD = 2000 / SCALE  # Game over boundary
-FPS = 50  # Frames per second
+FPS = 50  # Frames per second 50
 ZOOM = 2.7 # Camera zoom
 ZOOM_FOLLOW = True  # Set to False for fixed view (don't use zoom)
 
@@ -88,7 +88,7 @@ class FrictionDetector(contactListener):
             obj.tiles.add(tile)
             if not tile.road_visited:
                 tile.road_visited = True
-                self.env.reward += (1000.0 / len(self.env.track))*2 # Here control reward for each tile
+                self.env.reward += 5#(1000.0 / len(self.env.track)) # Here control reward for each tile
                 self.env.tile_visited_count += 1
 
                 # Lap is considered completed if enough % of the track was covered
@@ -614,22 +614,22 @@ class CarRacing(gym.Env, EzPickle):
             sin_y = math.sqrt(1-cos_y**2)
             h = z_*sin_y
             
-            step_reward -= h/2 # Penalizing for getting out of road center
-            
+            step_reward -= h/(TRACK_WIDTH * 1.5) # Penalizing for getting out of road center
+            #print(h/10, step_reward)
             if(h > 1.5*TRACK_WIDTH):
                 step_reward -= 100
                 terminated = True
             #print("X: {} Y: {} prev_X: {} prev_Y: {} h: {}".format(x, y, self.prev_x, self.prev_y, h))
             # Penalize if car position doesn't change
-            if (math.fabs(x - self.prev_x) < 0.1 and math.fabs(y - self.prev_y) < 0.1):
-                self.inactive_mult += 0.1
+            if (math.fabs(x - self.prev_x) < 0.05 and math.fabs(y - self.prev_y) < 0.05):
+                self.inactive_mult += 0.05
             else:
                 self.inactive_mult = 0
 
             step_reward -= self.inactive_mult
             self.prev_x = x
             self.prev_y = y
-            
+           
             
 
         if self.render_mode == "human":

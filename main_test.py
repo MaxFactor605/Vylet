@@ -1,10 +1,9 @@
-import gymnasium as gym
 import torch
 import numpy as np
 import os
 import matplotlib.pyplot as plt
-from pynput import keyboard
-from model import Agent, AgentGRU, AgentLSTM, Critic, CriticGRU, AgentGRUCont, AgentCont
+
+from model import Agent, AgentGRU, AgentLSTM, Critic, CriticGRU, AgentGRUCont, AgentCont, ActorCritic
 from car_racing import CarRacing
 
 
@@ -71,6 +70,7 @@ REWARD_NORM = False
 GRADIENT_CLIP = True
 CONTINUOUS = False
 PLOT = False
+UNITE = False
 
 def stack_image(stacked_image, new_image):
     new_image = new_image.squeeze(0)
@@ -123,26 +123,34 @@ if __name__ == '__main__':
     Test model without training
     """
     save_path = "./model_a2c_step_gru"
-    version_suff = '_v11'
+    version_suff = '_v20.'
     
     env = CarRacing(render_mode='human',continuous=CONTINUOUS, domain_randomize=False, train_randomize=False)
-    if CONTINUOUS:
-        agent = AgentCont(in_channels=3, n_actions=5, input_dims=[80, 96], random_state_init=False).double()
-    else:
+   
+    if UNITE:
+        model = ActorCritic().double()
 
-        agent = AgentGRU(in_channels=3, n_actions=5, input_dims=[80, 96], random_state_init=False).double()
-    critic = Critic().double()
+        if os.path.exists(save_path + version_suff):
+            model.load_state_dict(torch.load(save_path+version_suff))
+            print("United model loaded!")
+    else:
+        if CONTINUOUS:
+            agent = AgentCont(in_channels=3, n_actions=5, input_dims=[80, 96], random_state_init=False).double()
+        else:
+
+            agent = AgentGRU(in_channels=3, n_actions=5, input_dims=[80, 96], random_state_init=False).double()
+        critic = Critic().double()
     
-    if os.path.exists(save_path + "_agent" + version_suff):
-        agent.load_state_dict(torch.load(save_path+"_agent" + version_suff))
-        print("Agent loaded!")
-    else:
-        agent.apply(orthogonal_init)
-    if os.path.exists(save_path + "_critic" + version_suff):
-        critic.load_state_dict(torch.load(save_path+"_critic" + version_suff))
-        print("Critic Loaded!")
-    else:
-        critic.apply(orthogonal_init)
+        if os.path.exists(save_path + "_agent" + version_suff):
+            agent.load_state_dict(torch.load(save_path+"_agent" + version_suff))
+            print("Agent loaded!")
+        else:
+            agent.apply(orthogonal_init)
+        if os.path.exists(save_path + "_critic" + version_suff):
+            critic.load_state_dict(torch.load(save_path+"_critic" + version_suff))
+            print("Critic Loaded!")
+        else:
+            critic.apply(orthogonal_init)
 
     if PLOT: 
         plt.figure(figsize=(9,3))
@@ -151,8 +159,11 @@ if __name__ == '__main__':
  
     for episode in range(15000):
         observation, info = env.reset()
-        agent.reset_state()
-        critic.reset_state()
+        if UNITE:
+            model.reset_state()
+        else:
+            agent.reset_state()
+            critic.reset_state()
 
         for t in range(100):
             observation, reward, terminated, truncated, info = env.step([0,0,0] if CONTINUOUS else 0)
@@ -163,24 +174,14 @@ if __name__ == '__main__':
              
             observation = torch.tensor(observation).double()
             
-            if STACK:
-                observation = rgb2gray(observation)
-                #plt.imshow(observation, cmap='gray', vmin=0, vmax=1)
-                #plt.show()
-                stacked_image = stack_image(stacked_image, observation).double()
-                if INPUT_NORM:
-                    stacked_image = stack_image(stacked_image, observation).double()/255
-                else:
-                    stacked_image = stack_image(stacked_image, observation).double()
-                if CONTINUOUS:
-                    means, stds = agent(stacked_image.clone())
-                else:
-                    out = agent(stacked_image.clone())
-               # print(stacked_image)
+            
               
+           
+            if INPUT_NORM:
+                observation /= 255
+            if UNITE:
+                out, v = model(observation.clone())
             else:
-                if INPUT_NORM:
-                    observation /= 255
                 if CONTINUOUS:
                     means, stds = agent(observation.clone())
                     print(means, stds, reward)
