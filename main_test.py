@@ -3,7 +3,7 @@ import numpy as np
 import os
 import matplotlib.pyplot as plt
 
-from model import Agent, AgentGRU, AgentLSTM, Critic, CriticGRU, AgentGRUCont, AgentCont, ActorCritic
+from model import *
 from car_racing import CarRacing
 
 
@@ -70,7 +70,7 @@ REWARD_NORM = False
 GRADIENT_CLIP = True
 CONTINUOUS = False
 PLOT = False
-UNITE = False
+UNITE = True
 
 def stack_image(stacked_image, new_image):
     new_image = new_image.squeeze(0)
@@ -122,16 +122,16 @@ if __name__ == '__main__':
     """
     Test model without training
     """
-    save_path = "./model_a2c_step_gru"
-    version_suff = '_v20.'
+    save_path = "./model_small_786_19"
+    version_suff = ''
     
     env = CarRacing(render_mode='human',continuous=CONTINUOUS, domain_randomize=False, train_randomize=False)
    
     if UNITE:
-        model = ActorCritic().double()
+        model = ActorCritic_Small().double()
 
         if os.path.exists(save_path + version_suff):
-            model.load_state_dict(torch.load(save_path+version_suff))
+            model.load_state_dict(torch.load(save_path+version_suff, map_location=torch.device("cpu")))
             print("United model loaded!")
     else:
         if CONTINUOUS:
@@ -165,9 +165,7 @@ if __name__ == '__main__':
             agent.reset_state()
             critic.reset_state()
 
-        for t in range(100):
-            observation, reward, terminated, truncated, info = env.step([0,0,0] if CONTINUOUS else 0)
-        env.inactive_mult = 0
+        
         for t in range(5000):
             observation = observation[:80]
             
@@ -219,14 +217,14 @@ if __name__ == '__main__':
                 plt.title("Brake")
                 plt.plot(x_, b)
                 plt.pause(0.1)
+            
+            
+            observation, reward, term, trunc, info = env.step(actions if CONTINUOUS else action.item())
+            #print(t, reward)
+            done = term or trunc
             if not CONTINUOUS:
                 print(out, action.item(), v.item(), reward)
-            
-            observation, reward, terminated, truncated, info = env.step(actions if CONTINUOUS else action.item())
-            #print(t, reward)
-            
-            
-            if terminated or truncated:
+            if done:
                 break
             
        

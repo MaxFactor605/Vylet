@@ -476,9 +476,9 @@ class AgentCont(nn.Module):
 
 
 
-class ActorCritic(nn.Module):
+class ActorCritic_Small(nn.Module):
     def __init__(self, in_channels=3, n_actions=5, linear_size=4*6*32, input_dims=[80, 96], random_state_init = False):
-        super(ActorCritic, self).__init__()
+        super(ActorCritic_Small, self).__init__()
         self.in_channels = in_channels
         self.linear_size = linear_size
         self.n_actions = n_actions
@@ -486,12 +486,12 @@ class ActorCritic(nn.Module):
         self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=16, kernel_size=8, stride=4, padding=1)
         self.conv2 = nn.Conv2d(in_channels=16, out_channels=32, kernel_size=4, stride=2)
         self.conv3 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3)
-        self.conv4 = nn.Conv2d(in_channels=64, out_channels=32, kernel_size=3)
-        self.l1 = nn.Linear(linear_size, 64)
-        self.l2 = nn.Linear(64, 10)
-        self.gru = nn.GRU(10, 5)
-        self.actor_head = nn.Linear(5, n_actions)
-        self.critic_head = nn.Linear(5, 1)
+        self.conv4 = nn.Conv2d(in_channels=64, out_channels=32, kernel_size=3) # out_channels = 32
+        self.l1 = nn.Linear(linear_size, 64) # 64
+        self.l2 = nn.Linear(64, 16) # 16
+        self.gru = nn.GRU(16, 8) # 8
+        self.actor_head = nn.Linear(8, n_actions)
+        self.critic_head = nn.Linear(8, 1)
         self.random_state_init = random_state_init
         #self.l1 = nn.Linear(linear_size, 128)
         #self.l2 = nn.Linear(128, 64)
@@ -520,6 +520,9 @@ class ActorCritic(nn.Module):
         x = F.relu(x, inplace=False)
         x = self.l2(x)
         x = F.relu(x, inplace=False)
+
+        x, self.hidden_state = self.gru(x, self.hidden_state)
+        """
         if x.shape[0] > 1: # When training process all sequence at once
             
             
@@ -538,9 +541,95 @@ class ActorCritic(nn.Module):
             
             self.hidden_state = self.hidden_state_tmp.detach()
     
-
+        """
         
-        if np.random.uniform(low = 0, high = 1) > 0.999:
+        if np.random.uniform(low = 0, high = 1) > 0.0:
+            
+            print("Hidden_state\t", self.hidden_state)
+          
+        probs = F.softmax(self.actor_head(x), dim=-1)
+        
+        value = self.critic_head(x)
+        return probs, value
+    
+
+    def reset_state(self):
+        if self.random_state_init:
+            self.hidden_state = torch.rand([1, 8], dtype=torch.double)
+            self.cell_state = torch.rand([1, 8], dtype=torch.double)
+        else:
+            self.hidden_state = None
+            self.cell_state = None
+
+
+class ActorCritic_Big(nn.Module):
+    def __init__(self, in_channels=3, n_actions=5, linear_size=4*6*128, input_dims=[80, 96], random_state_init = False):
+        super(ActorCritic_Big, self).__init__()
+        self.in_channels = in_channels
+        self.linear_size = linear_size
+        self.n_actions = n_actions
+        self.input_dims = input_dims
+        self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=16, kernel_size=8, stride=4, padding=1)
+        self.conv2 = nn.Conv2d(in_channels=16, out_channels=32, kernel_size=4, stride=2)
+        self.conv3 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3)
+        self.conv4 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3) # out_channels = 32
+        self.l1 = nn.Linear(linear_size, 512) # 64
+        #self.l2 = nn.Linear(64, 16) # 16
+        self.gru = nn.GRU(512, 256) # 8
+        self.actor_head = nn.Linear(256, n_actions)
+        self.critic_head = nn.Linear(256, 1)
+        self.random_state_init = random_state_init
+        #self.l1 = nn.Linear(linear_size, 128)
+        #self.l2 = nn.Linear(128, 64)
+        #self.gru = nn.GRU(64, 32)
+        #self.l3 = nn.Linear(32, n_actions)
+        self.random_state_init = random_state_init
+        if random_state_init:
+            self.hidden_state = torch.rand([1, 8], dtype=torch.double)
+            
+        else:
+            self.hidden_state = None
+
+    def forward(self, x):
+        x = x.view(-1, self.in_channels, self.input_dims[0], self.input_dims[1])
+        x = self.conv1(x)
+        x = F.relu(x, inplace=False)
+        x = self.conv2(x)
+        x = F.relu(x, inplace=False)
+        x = self.conv3(x)
+        x = F.relu(x, inplace=False)
+        x = self.conv4(x)
+        x = F.relu(x, inplace=False)
+    
+        x = x.view(-1, self.linear_size)
+        x = self.l1(x)
+        x = F.relu(x, inplace=False)
+        #x = self.l2(x)
+        #x = F.relu(x, inplace=False)
+
+        x, self.hidden_state = self.gru(x, self.hidden_state)
+        """
+        if x.shape[0] > 1: # When training process all sequence at once
+            
+            
+            x, h_0 = self.gru(x)
+            
+   
+
+        else: # When playing process frame by frame and save state beatween
+            #x = x.unsqueeze(dim = 0)
+         
+            if self.hidden_state is None:
+                x, self.hidden_state_tmp = self.gru(x)
+
+            else:
+                x, self.hidden_state_tmp = self.gru(x, self.hidden_state)
+            
+            self.hidden_state = self.hidden_state_tmp.detach()
+    
+        """
+        
+        if np.random.uniform(low = 0, high = 1) > 0.9995:
             
             print("Hidden_state\t", self.hidden_state)
           
