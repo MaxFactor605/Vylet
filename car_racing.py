@@ -5,11 +5,11 @@ from typing import Optional, Union
 
 import numpy as np
 
-import gym
-from gym import spaces
+import gymnasium as gym
+from gymnasium import spaces
 from car_dynamics import Car
-from gym.error import DependencyNotInstalled, InvalidAction
-from gym.utils import EzPickle
+from gymnasium.error import DependencyNotInstalled, InvalidAction
+from gymnasium.utils import EzPickle
 
 try:
     import Box2D
@@ -88,7 +88,7 @@ class FrictionDetector(contactListener):
             obj.tiles.add(tile)
             if not tile.road_visited:
                 tile.road_visited = True
-                self.env.reward += 5#(1000.0 / len(self.env.track)) # Here control reward for each tile
+                self.env.reward += (1000.0 / len(self.env.track)) # Here control reward for each tile
                 self.env.tile_visited_count += 1
 
                 # Lap is considered completed if enough % of the track was covered
@@ -195,9 +195,16 @@ class CarRacing(gym.Env, EzPickle):
         verbose: bool = False,
         lap_complete_percent: float = 0.95,
         domain_randomize: bool = False,
-        continuous: bool = True,
-        train_randomize: bool = True
-        
+        continuous: bool = False,
+        full_randomize: bool = False,
+        determined_randomize: bool = True,
+        checkpoints: int = 3,
+        noise: float = 0.8,
+        rad: float = 140, 
+        right: bool = False,
+        custom_continuous: bool = False,
+        random_trase: bool = False,
+        car_randomize_factor: float = 0
     ):
         EzPickle.__init__(
             self,
@@ -208,10 +215,14 @@ class CarRacing(gym.Env, EzPickle):
             continuous,
         )
         self.continuous = continuous
+        self.custom_continuous = custom_continuous
         self.domain_randomize = domain_randomize
         self.lap_complete_percent = lap_complete_percent
         self._init_colors()
-
+        self.checkpoints = checkpoints
+        self.noise = noise
+        self.rad = rad
+        self.right = right
         self.contactListener_keepref = FrictionDetector(self, self.lap_complete_percent)
         self.world = Box2D.b2World((0, 0), contactListener=self.contactListener_keepref)
         self.screen: Optional[pygame.Surface] = None
@@ -229,12 +240,14 @@ class CarRacing(gym.Env, EzPickle):
         self.fd_tile = fixtureDef(
             shape=polygonShape(vertices=[(0, 0), (1, 0), (1, -1), (0, -1)])
         )
-
+        self.random_trase = random_trase
+        self.car_randomize_factor = car_randomize_factor
+        self.path = []
         # This will throw a warning in tests/envs/test_envs in utils/env_checker.py as the space is not symmetric
         #   or normalised however this is not possible here so ignore
         if self.continuous:
             self.action_space = spaces.Box(
-                np.array([-1, 0, 0]).astype(np.float32),
+                np.array([0, -1, 0]).astype(np.float32),
                 np.array([+1, +1, +1]).astype(np.float32),
             )  # steer, gas, brake
         else:
@@ -242,18 +255,19 @@ class CarRacing(gym.Env, EzPickle):
             # do nothing, left, right, gas, brake
 
         self.observation_space = spaces.Box(
-            low=0, high=255, shape=(STATE_H, STATE_W, 3), dtype=np.uint8
+            low=0, high=255, shape=(80, STATE_W, 3), dtype=np.uint8  # STATE_H => 80
         )
 
         self.render_mode = render_mode
         self.action_mult = 1
         self.prev_action = 0
         self.car_steer_angle = 0
-        if self.continuous:
-            self.base_step = 0.1
-        else:
-            self.base_step = 1
-        self.train_randomize = train_randomize
+        self.base_step = 0.1
+        self.full_randomize = full_randomize
+        self.determined_randomize = determined_randomize
+        self.step_count = 0
+        self.rms_acc = 0
+        self.prev_h = 0
 
     def _destroy(self):
         if not self.road:
@@ -296,25 +310,33 @@ class CarRacing(gym.Env, EzPickle):
             self.grass_color[idx] += 20
 
     def _create_track(self):
-        CHECKPOINTS = 12
+        CHECKPOINTS = self.checkpoints
         
         # Create checkpoints
         checkpoints = []
         for c in range(CHECKPOINTS):
-            #noise = self.np_random.uniform(0, 2 * math.pi * 1 / CHECKPOINTS)
-            noise =  math.pi * 1 / CHECKPOINTS
+            if self.random_trase:
+                noise = self.np_random.uniform(0, 2 * math.pi * 1 / CHECKPOINTS)
+            else:
+                noise = self.noise
+            #noise =  math.pi * 1 / CHECKPOINTS
             alpha = 2 * math.pi * c / CHECKPOINTS + noise
-            #rad = self.np_random.uniform(TRACK_RAD / 3, TRACK_RAD)
-            rad = TRACK_RAD
-
-            if c == 0:
-                alpha = 0
-                rad = 1.5 * TRACK_RAD
-            if c == CHECKPOINTS - 1:
-                alpha = 2 * math.pi * c / CHECKPOINTS
-                self.start_alpha = 2 * math.pi * (-0.5) / CHECKPOINTS
-                rad = 1.5 * TRACK_RAD
-
+            if self.random_trase:
+                rad = self.np_random.uniform(TRACK_RAD / 3, TRACK_RAD) # TRACK_RAD = 900
+            else:
+                rad = self.rad
+            #rad = TRACK_RAD-100
+            if self.random_trase:
+                if c == 0:
+                    alpha = 0
+                    rad = 1.5 * TRACK_RAD
+                if c == CHECKPOINTS - 1:
+                    alpha = 2 * math.pi * c / CHECKPOINTS
+                    self.start_alpha = 2 * math.pi * (-0.5) / CHECKPOINTS
+                    rad = 1.5 * TRACK_RAD
+            else:
+                if c == CHECKPOINTS - 1:
+                    self.start_alpha = 2 * math.pi * (-0.5) / CHECKPOINTS
             checkpoints.append((alpha, rad * math.cos(alpha), rad * math.sin(alpha)))
         self.road = []
 
@@ -414,16 +436,19 @@ class CarRacing(gym.Env, EzPickle):
 
         # Red-white border on hard turns
         border = [False] * len(track)
+        self.angles = [0.0] * len(track)
         for i in range(len(track)):
             good = True
             oneside = 0
             for neg in range(BORDER_MIN_COUNT):
                 beta1 = track[i - neg - 0][1]
                 beta2 = track[i - neg - 1][1]
-                good &= abs(beta1 - beta2) > TRACK_TURN_RATE * 0.2
+                good &= abs(beta1 - beta2) > TRACK_TURN_RATE * 0.25
                 oneside += np.sign(beta1 - beta2)
             good &= abs(oneside) == BORDER_MIN_COUNT
             border[i] = good
+            
+            #self.angles[i] = abs(beta1 - beta2)
         for i in range(len(track)):
             for neg in range(BORDER_MIN_COUNT):
                 border[i - neg] |= border[i]
@@ -454,12 +479,18 @@ class CarRacing(gym.Env, EzPickle):
             t = self.world.CreateStaticBody(fixtures=self.fd_tile)
             t.userData = t
             c = 0.01 * (i % 3) * 255
+            #if border[i] or (i > 2 and border[i - 2]) or (i < len(track)-2 and border[i+2]):
+                #print(beta1, beta2)
+                #print(abs(beta1 - beta2))
+            #    t.color = np.clip(self.road_color + 255, 0 ,255)
+            #else:
             t.color = self.road_color + c
             t.road_visited = False
             t.road_friction = 1.0
             t.idx = i
             t.fixtures[0].sensor = True
             self.road_poly.append(([road1_l, road1_r, road2_r, road2_l], t.color))
+           # print([road1_l, road1_r, road2_r, road2_l])
             self.road.append(t)
             if border[i]:
                 side = np.sign(beta2 - beta1)
@@ -485,6 +516,7 @@ class CarRacing(gym.Env, EzPickle):
                         (255, 255, 255) if i % 2 == 0 else (255, 0, 0),
                     )
                 )
+        self.border = border
         self.track = track
         return True
 
@@ -524,22 +556,31 @@ class CarRacing(gym.Env, EzPickle):
                     "retry to generate track (normal if there are not many"
                     "instances of this message)"
                 )
-        if self.train_randomize and self.continuous:
-            self.base_step = np.random.uniform(low = 0.01, high = 0.1)
-            print("New base step: {}".format(self.base_step))
-        self.car = Car(self.world, *self.track[0][1:4], randomize = self.train_randomize)
+        #if self.train_randomize and self.continuous:
+            #self.base_step = np.random.uniform(low = 0.01, high = 0.1)
+            #print("New base step: {}".format(self.base_step))
+        #print(self.track[0][1], self.track[int(len(self.track)/2)][1])
+        if self.right:
+            self.car = Car(self.world, (math.pi + self.track[10][1]), *self.track[10][2:4], full_randomize = self.full_randomize, determined_randomize = self.determined_randomize, randomize_percent = self.car_randomize_factor)
+        else:
+            self.car = Car(self.world,  *self.track[0][1:4], full_randomize = self.full_randomize, determined_randomize = self.determined_randomize, randomize_percent = self.car_randomize_factor)
         self.prev_x, self.prev_y = self.car.hull.position
-
+        
+       # self.car.hull.angularVelocity = 0
         self.car_steer_angle = 0
         self.action_mult = 1
         self.prev_action = 0
-
+        self.prev_angular_velocity = 0
+        self.step_count = 0
+        self.rms_acc = 0
+        self.prev_h = 0
+        self.path = []
         if self.render_mode == "human":
             self.render()
         return self.step(None)[0], {}
 
     def step(self, action: Union[np.ndarray, int]):
-        
+        self.step_count += 1
         assert self.car is not None
         if action is not None:
             
@@ -554,20 +595,33 @@ class CarRacing(gym.Env, EzPickle):
                         f"The supported action_space is `{self.action_space}`"
                     )
             
-                if action == self.prev_action and self.continuous:
+                if action == self.prev_action and self.custom_continuous:
                     self.action_mult += 1
                 else:
                     self.action_mult = 1
 
                 #print(self.action_mult)
-                self.car_steer_angle = (-self.base_step * (action == 1) + self.base_step * (action == 2)) * self.action_mult
-                #print(self.car_steer_angle)
-                self.car_steer_angle = np.clip(self.car_steer_angle, -1, 1)
-
-                self.car.steer(self.car_steer_angle)
-                self.car.gas(self.base_step * self.action_mult * (action == 3))
-                self.car.brake(self.base_step * self.action_mult * (action == 4))
-                self.prev_action = action
+                
+                
+                if self.custom_continuous:
+                    self.car_steer_angle = (-self.base_step * (action == 1) + self.base_step * (action == 2)) * self.action_mult
+                    #print(self.car_steer_angle)
+                    self.car_steer_angle = np.clip(self.car_steer_angle, -1, 1)
+                    self.car.steer(self.car_steer_angle)
+                    self.car.gas((action == 3) * self.action_mult * self.base_step)
+                    self.car.brake((action == 4) * self.action_mult * self.base_step)
+                else:
+                    if action == 1:
+                        self.car.steer(-1)
+                    elif action == 2:
+                        self.car.steer(1)
+                    else:
+                        self.car.steer(0)
+                    #self.car.steer(#self.car_steer_angle)
+                    self.car.gas((action == 3))
+                    self.car.brake((action == 4))
+        
+        self.prev_action = action
 
         self.car.step(1.0 / FPS)
         self.world.Step(1.0 / FPS, 6 * 30, 2 * 30)
@@ -576,8 +630,7 @@ class CarRacing(gym.Env, EzPickle):
         self.state = self._render("state_pixels")
 
         step_reward = 0
-        terminated = False
-        truncated = False
+        done = False
         if action is not None:  # First step without action, called from reset()
             self.reward -= 0
             # We actually don't want to count fuel spent, we want car to be faster.
@@ -589,20 +642,23 @@ class CarRacing(gym.Env, EzPickle):
                 # Truncation due to finishing lap
                 # This should not be treated as a failure
                 # but like a timeout
-                truncated = True
+            
+                done = True
             x, y = self.car.hull.position
             
             
             if abs(x) > PLAYFIELD or abs(y) > PLAYFIELD:
-                terminated = True
+                done = True
                 step_reward = -100
 
             min_dist = [PLAYFIELD, 0, 0] # nearest tile
             min_dist2 = [PLAYFIELD, 0, 0] # second nearest tile
-            for tile in self.track:
+            nearest_tile_id = 0
+            for i, tile in enumerate(self.track):
                 dist = math.sqrt((x - tile[2]) ** 2 + (y - tile[3]) ** 2)
                 if(dist < min_dist[0]):
                     min_dist = [dist, tile[2], tile[3]]
+                    nearest_tile_id = i
                 elif dist < min_dist2[0]:
                     min_dist2 = [dist, tile[2], tile[3]]
             
@@ -614,40 +670,119 @@ class CarRacing(gym.Env, EzPickle):
             sin_y = math.sqrt(1-cos_y**2)
             h = z_*sin_y
             
-            step_reward -= h/(TRACK_WIDTH * 1.5) # Penalizing for getting out of road center
+            is_turn = False
+            #turn_angle = 0
+            if self.right:
+                if nearest_tile_id - 10 < 0:
+                    is_turn = sum(self.border[:nearest_tile_id+2]) > 0
+                    #turn_angle = sum(self.angles[:nearest_tile_id+2])
+                else:
+                    if nearest_tile_id + 2 >= len(self.track):
+                        is_turn = sum(self.border[nearest_tile_id-10:]) > 0
+                    #    turn_angle = sum(self.angles[nearest_tile_id-5:])
+                    else:
+                        is_turn = sum(self.border[nearest_tile_id-10:nearest_tile_id+2]) > 0
+                    #    turn_angle = sum(self.angles[nearest_tile_id-5:nearest_tile_id+2])
+            else:
+                if nearest_tile_id - 2 < 0:
+                    is_turn = sum(self.border[:nearest_tile_id+10]) > 0
+                    #turn_angle = sum(self.angles[:nearest_tile_id+2])
+                else:
+                    if nearest_tile_id + 10 >= len(self.track):
+                        is_turn = sum(self.border[nearest_tile_id-2:]) > 0
+                    #    turn_angle = sum(self.angles[nearest_tile_id-5:])
+                    else:
+                        is_turn = sum(self.border[nearest_tile_id-2:nearest_tile_id+10]) > 0
+                    #    turn_angle = sum(self.angles[nearest_tile_id-5:nearest_tile_id+2])
+            #print(turn_angle, self.angles[nearest_tile_id])
+
+            
+            #if nearest_tile_id + 5 >= len(self.track):
+            #    is_turn = sum(self.border[nearest_tile_id-5:]) > 0
+            #else:
+            #    if nearest_tile_id - 5 < 0:
+            #        is_turn = sum(self.border[:nearest_tile_id+5]) > 0
+            #    else:
+            #        is_turn = sum(self.border[nearest_tile_id-5:nearest_tile_id+5]) > 0            
+            if self.random_trase:
+                if self.t > 1.5:
+                    step_reward += min(math.sqrt(self.car.hull.linearVelocity[0]**2 + self.car.hull.linearVelocity[1]**2) - 35, 0)/50
+                if not is_turn:
+                    if abs(self.prev_angular_velocity - self.car.hull.angularVelocity) >= 0.4:
+                        step_reward -= 1
+            else:
+                if is_turn:
+                    if self.checkpoints > 4:
+                        step_reward -= max(math.sqrt(self.car.hull.linearVelocity[0]**2 + self.car.hull.linearVelocity[1]**2) - 65, 0)/10
+                    elif self.checkpoints > 2:
+                        step_reward -= max(math.sqrt(self.car.hull.linearVelocity[0]**2 + self.car.hull.linearVelocity[1]**2) - 55, 0)/10
+                    else:
+                        step_reward -= max(math.sqrt(self.car.hull.linearVelocity[0]**2 + self.car.hull.linearVelocity[1]**2) - 45, 0)/10
+                    self.rms_acc = 0
+                    self.step_count = 0
+                else:
+                    if self.t > 1:
+                        step_reward -= self.car.wheels[0].joint.angle**2 * 10
+                    #self.rms_acc += (h-self.prev_h)**2
+                    #step_reward -= math.sqrt(self.rms_acc/self.step_count)
+                    #print(math.sqrt(self.rms_acc/self.step_count) )
+                    #print((h-self.prev_h)**2)
+                    step_reward -= max(math.sqrt(self.car.hull.linearVelocity[0]**2 + self.car.hull.linearVelocity[1]**2) - 85, 0)/10
+                    if self.t > 1.5:
+                        step_reward += min(math.sqrt(self.car.hull.linearVelocity[0]**2 + self.car.hull.linearVelocity[1]**2) - 35, 0)/20
+                    if abs(self.prev_angular_velocity - self.car.hull.angularVelocity) >= 0.4:
+                        step_reward -= 1
+
+            if np.sign(self.car.hull.angularVelocity) != np.sign(self.prev_angular_velocity):
+                step_reward -= 1  
+
+
+            step_reward -= max(abs(self.car.hull.angularVelocity) - 4, 0)*3
+            step_reward -= np.clip(h/TRACK_WIDTH, 0.05, 1)
             #print(h/10, step_reward)
-            if(h > 1.5*TRACK_WIDTH):
-                step_reward -= 100
-                terminated = True
+            #if np.sign(self.car.hull.angularVelocity) != np.sign(self.prev_angular_velocity):
+            #    print("uuuuu", self.t)
+            if(h > 2*TRACK_WIDTH):
+                step_reward -= 500
+                done = True
             #print("X: {} Y: {} prev_X: {} prev_Y: {} h: {}".format(x, y, self.prev_x, self.prev_y, h))
             # Penalize if car position doesn't change
-            if (math.fabs(x - self.prev_x) < 0.05 and math.fabs(y - self.prev_y) < 0.05):
-                self.inactive_mult += 0.05
+            if (math.fabs(x - self.prev_x) < 0.1 and math.fabs(y - self.prev_y) < 0.1):
+                self.inactive_mult += 1
             else:
                 self.inactive_mult = 0
-
-            step_reward -= self.inactive_mult
+            #print("{:.2f}\t{:.2f}\t{:.2f}".format(math.sqrt(self.car.hull.linearVelocity[0]**2 + self.car.hull.linearVelocity[1]**2), self.car.hull.angularVelocity, step_reward))
+            #print(self.car.hull.angularDamping)
+            #step_reward -= self.inactive_mult
+            if self.inactive_mult > 200:
+                step_reward -= 500
+                done = True
             self.prev_x = x
             self.prev_y = y
-           
-            
-
+            self.prev_angular_velocity = self.car.hull.angularVelocity
+            self.prev_h = h
+            self.path.append([(x,y), (x+1, y) ,(x+1,y+1), (x,y+1)])
+            #print(x,y)
+        #print(self.tile_visited_count/len(self.track))
         if self.render_mode == "human":
             self.render()
         #print(step_reward)
-        return self.state, step_reward, terminated, truncated, {}
+        return self.state[:80], step_reward, done, done, {}
 
-    def render(self):
-        if self.render_mode is None:
+    def render(self, render_mode = None):
+        if self.render_mode is None and render_mode is None:
             gym.logger.warn(
                 "You are calling render method without specifying any render mode. "
                 "You can specify the render_mode at initialization, "
                 f'e.g. gym("{self.spec.id}", render_mode="rgb_array")'
             )
         else:
-            return self._render(self.render_mode)
+            return self._render(self.render_mode if render_mode is None else render_mode)
 
-    def _render(self, mode: str):
+    def take_screenshot(self):
+        return self._render("rgb_array", 0.7)
+    
+    def _render(self, mode: str, zoom = ZOOM):
         assert mode in self.metadata["render_modes"]
 
         pygame.font.init()
@@ -665,13 +800,13 @@ class CarRacing(gym.Env, EzPickle):
 
         assert self.car is not None
         # computing transformations
-        angle = -self.car.hull.angle
+        angle = -self.car.hull.angle if mode != "rgb_array" else 0
         # Animating first second zoom.
-        zoom = 0.1 * SCALE * max(1 - self.t, 0) + ZOOM * SCALE * min(self.t, 1)
-        scroll_x = -(self.car.hull.position[0]) * zoom
-        scroll_y = -(self.car.hull.position[1]) * zoom
+        zoom = 0.1 * SCALE * 0 + zoom * SCALE * 1
+        scroll_x = -(self.car.hull.position[0]) * zoom if mode != "rgb_array" else 0
+        scroll_y = -(self.car.hull.position[1]) * zoom if mode != "rgb_array" else 0
         trans = pygame.math.Vector2((scroll_x, scroll_y)).rotate_rad(angle)
-        trans = (WINDOW_W / 2 + trans[0], WINDOW_H / 4 + trans[1])
+        trans = (WINDOW_W / 2 + trans[0], WINDOW_H / 4 + trans[1]) if mode != "rgb_array" else (WINDOW_W/2, WINDOW_H/2)
 
         self._render_road(zoom, trans, angle)
         self.car.draw(
@@ -681,7 +816,7 @@ class CarRacing(gym.Env, EzPickle):
             angle,
             mode not in ["state_pixels_list", "state_pixels"],
         )
-
+        
         self.surf = pygame.transform.flip(self.surf, False, True)
 
         # showing stats
@@ -738,13 +873,23 @@ class CarRacing(gym.Env, EzPickle):
             self._draw_colored_polygon(
                 self.surf, poly, self.grass_color, zoom, translation, angle
             )
+       # print(translation)
+        #path = [
+        #    (c[0]*zoom, c[1] * zoom) for c in self.path
+        #]
+        #for (x,y) in self.path:
+        #    gfxdraw.aapolygon(self.surf, [(x,y), (x,y+1), (x+1,y), (x+1,y+1)], [255,0,0])
 
         # draw road
         for poly, color in self.road_poly:
             # converting to pixel coordinates
             poly = [(p[0], p[1]) for p in poly]
+            #print(poly)
             color = [int(c) for c in color]
             self._draw_colored_polygon(self.surf, poly, color, zoom, translation, angle)
+        for poly in self.path:
+            poly = [(p[0], p[1]) for p in poly]
+            self._draw_colored_polygon(self.surf, poly, [255,255, 255], zoom, translation, angle)
 
     def _render_indicators(self, W, H):
         s = W / 40.0
@@ -880,7 +1025,7 @@ if __name__ == "__main__":
             if event.type == pygame.QUIT:
                 quit = True
 
-    env = CarRacing(render_mode="human", continuous=False)
+    env = CarRacing(render_mode="human", continuous=False, custom_continuous=True)
 
     quit = False
     while not quit:
