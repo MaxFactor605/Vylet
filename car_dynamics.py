@@ -12,7 +12,7 @@ import math
 import Box2D
 import numpy as np
 
-from gym.error import DependencyNotInstalled
+from gymnasium.error import DependencyNotInstalled
 
 try:
     from Box2D.b2 import fixtureDef, polygonShape, revoluteJointDef
@@ -21,11 +21,11 @@ except ImportError:
 
 
 SIZE = 0.02
-#ENGINE_POWER = 100000000 * SIZE * SIZE # default 100000000 * SIZE * SIZE
-#WHEEL_MOMENT_OF_INERTIA = 1000 * SIZE * SIZE # default 4000 * SIZE * SIZE
-#FRICTION_LIMIT = (
-#    1000000 * SIZE * SIZE # 1000000 * SIZE * SIZE
-#)  # friction ~= mass ~= size^2 (calculated implicitly using density)
+ENGINE_POWER = 100000000 * SIZE * SIZE # default 100000000 * self.size * self.size
+WHEEL_MOMENT_OF_INERTIA = 1000 * SIZE * SIZE # default 4000 * self.size * self.size
+FRICTION_LIMIT = (
+    1000000 * SIZE * SIZE # 1000000 * self.size * self.size
+)  # friction ~= mass ~= size^2 (calculated implicitly using density)
 WHEEL_R = 27 # default 27
 WHEEL_W = 14
 WHEELPOS = [(-55, +80), (+55, +80), (-55, -82), (+55, -82)]
@@ -48,75 +48,106 @@ MUD_COLOR = (102, 102, 0)
 
 
 class Car:
-    def __init__(self, world, init_angle, init_x, init_y, randomize = True):
+    def __init__(self, world, init_angle, init_x, init_y, full_randomize = False, determined_randomize = False, randomize_percent = 0.5):
         self.world: Box2D.b2World = world
-        if randomize:
-            self.random_factor_engine = np.random.uniform(low = 0.95, high = 1.05)
-            self.random_factor_wheel = np.random.uniform(low = 0.95, high = 1.05)
-            self.random_factor_friction = np.random.uniform(low = 0.95, high = 1.05)
+        if full_randomize:
+            self.random_factor_engine = np.random.uniform(low = 1 - randomize_percent, high = 1 + randomize_percent)
+            self.random_factor_wheel = np.random.uniform(low = 1 - randomize_percent, high = 1 + randomize_percent)
+            self.random_factor_friction = np.random.uniform(low = 1 - randomize_percent, high = 1 + randomize_percent)
+            self.random_factor_brake = np.random.uniform(low = 1 - randomize_percent, high = 1 + randomize_percent)
+            self.random_factor_size = np.random.uniform(low = 1 - randomize_percent, high = 1 + randomize_percent)
+            self.random_factor_wheel_rad = np.random.uniform(low = 1 - randomize_percent, high = 1 + randomize_percent)
+            self.random_factor_wheel_width = np.random.uniform(low = 1 - randomize_percent, high = 1 + randomize_percent)
+
+            self.random_factor_max_steer_step = np.random.uniform(low=1 - randomize_percent, high = 1 + randomize_percent)
+            self.random_factor_max_steer_angle = np.random.uniform(low = 1 - randomize_percent, high = 1 + randomize_percent)
+  
+        elif determined_randomize:
+            self.random_factor_engine = 1  + randomize_percent
+            self.random_factor_wheel = 1 + randomize_percent
+            self.random_factor_friction = 1 + randomize_percent
+            self.random_factor_brake = 1 + randomize_percent
+            self.random_factor_size = 1 + randomize_percent
+            self.random_factor_wheel_rad = 1 + randomize_percent
+            self.random_factor_wheel_width = 1 + randomize_percent
+            self.random_factor_max_steer_step = 1 + randomize_percent
+            self.random_factor_max_steer_angle = 1 + randomize_percent
         else:
             self.random_factor_engine = 1
             self.random_factor_wheel = 1
             self.random_factor_friction = 1
-        self.engine_power = 100000000 * SIZE * SIZE * self.random_factor_engine
-        self.wheel_moment_of_inertia = 4000 * SIZE * SIZE * self.random_factor_wheel
+            self.random_factor_brake = 1
+            self.random_factor_size = 1
+            self.random_factor_wheel_rad = 1
+            self.random_factor_wheel_width = 1
+            self.random_factor_max_steer_step = 1
+            self.random_factor_max_steer_angle = 1
+
+
+
+
+        self.size = SIZE * self.random_factor_size
+        self.wheel_r = WHEEL_R * self.random_factor_wheel_rad
+        self.wheel_w = WHEEL_W * self.random_factor_wheel_width
+        self.engine_power = 100000000 * self.size * self.size * self.random_factor_engine
+        self.wheel_moment_of_inertia = 4000 * self.size * self.size * self.random_factor_wheel
         self.friction_limit = (
-            1000000 * SIZE * SIZE * self.random_factor_friction
+            1000000 * self.size * self.size * self.random_factor_friction
         ) 
-        if randomize:
-            print("Car generated!")
-            print("\t Engine_power: {}, random_factor: {}".format(self.engine_power, self.random_factor_engine))
-            print("\t wheel_moment_of_inertia: {}, random_factor: {}".format(self.wheel_moment_of_inertia, self.random_factor_wheel))
-            print("\t friction_limit: {}, random_factor: {}".format(self.friction_limit, self.random_factor_friction))
-            
+       
         self.hull: Box2D.b2Body = self.world.CreateDynamicBody(
             position=(init_x, init_y),
             angle=init_angle,
             fixtures=[
                 fixtureDef(
                     shape=polygonShape(
-                        vertices=[(x * SIZE, y * SIZE) for x, y in HULL_POLY1]
+                        vertices=[(x * self.size, y * self.size) for x, y in HULL_POLY1]
                     ),
                     density=1.0,
                 ),
                 fixtureDef(
                     shape=polygonShape(
-                        vertices=[(x * SIZE, y * SIZE) for x, y in HULL_POLY2]
+                        vertices=[(x * self.size, y * self.size) for x, y in HULL_POLY2]
                     ),
                     density=1.0,
                 ),
                 fixtureDef(
                     shape=polygonShape(
-                        vertices=[(x * SIZE, y * SIZE) for x, y in HULL_POLY3]
+                        vertices=[(x * self.size, y * self.size) for x, y in HULL_POLY3]
                     ),
                     density=1.0,
                 ),
                 fixtureDef(
                     shape=polygonShape(
-                        vertices=[(x * SIZE, y * SIZE) for x, y in HULL_POLY4]
+                        vertices=[(x * self.size, y * self.size) for x, y in HULL_POLY4]
                     ),
                     density=1.0,
                 ),
             ],
         )
-        self.hull.color = (0.8, 0.0, 0.0)
+        if full_randomize or determined_randomize:
+            self.hull.color = np.random.uniform(low = 0, high = 1, size = 3)
+        #elif determined_randomize:
+        #    self.hull.color = (1/(1+np.exp(-randomize_percent)),1/(1+np.exp(-randomize_percent)) ,1/(1+np.exp(-randomize_percent)))
+        else:
+            self.hull.color = (0.8, 0, 0)
         self.wheels = []
         self.fuel_spent = 0.0
         WHEEL_POLY = [
-            (-WHEEL_W, +WHEEL_R),
-            (+WHEEL_W, +WHEEL_R),
-            (+WHEEL_W, -WHEEL_R),
-            (-WHEEL_W, -WHEEL_R),
+            (-self.wheel_w, +self.wheel_r),
+            (+self.wheel_w, +self.wheel_r),
+            (+self.wheel_w, -self.wheel_r),
+            (-self.wheel_w, -self.wheel_r),
         ]
         for wx, wy in WHEELPOS:
             front_k = 1.0 if wy > 0 else 1.0
             w = self.world.CreateDynamicBody(
-                position=(init_x + wx * SIZE, init_y + wy * SIZE),
+                position=(init_x + wx * self.size, init_y + wy * self.size),
                 angle=init_angle,
                 fixtures=fixtureDef(
                     shape=polygonShape(
                         vertices=[
-                            (x * front_k * SIZE, y * front_k * SIZE)
+                            (x * front_k * self.size, y * front_k * self.size)
                             for x, y in WHEEL_POLY
                         ]
                     ),
@@ -126,7 +157,7 @@ class Car:
                     restitution=0.0,
                 ),
             )
-            w.wheel_rad = front_k * WHEEL_R * SIZE
+            w.wheel_rad = front_k * self.wheel_r * self.size
             w.color = WHEEL_COLOR
             w.gas = 0.0
             w.brake = 0.0
@@ -138,14 +169,14 @@ class Car:
             rjd = revoluteJointDef(
                 bodyA=self.hull,
                 bodyB=w,
-                localAnchorA=(wx * SIZE, wy * SIZE),
+                localAnchorA=(wx * self.size, wy * self.size),
                 localAnchorB=(0, 0),
                 enableMotor=True,
                 enableLimit=True,
-                maxMotorTorque=180 * 900 * SIZE * SIZE,
+                maxMotorTorque=180 * 900 * self.size * self.size ,
                 motorSpeed=0,
-                lowerAngle=-0.4,
-                upperAngle=+0.4,
+                lowerAngle=-0.4 * self.random_factor_max_steer_angle,
+                upperAngle=+0.4 * self.random_factor_max_steer_angle,
             )
             w.joint = self.world.CreateJoint(rjd)
             w.tiles = set()
@@ -188,11 +219,11 @@ class Car:
             # Steer each wheel
             dir = np.sign(w.steer - w.joint.angle)
             val = abs(w.steer - w.joint.angle)
-            w.joint.motorSpeed = dir * min(50.0 * val, 3.0)
+            w.joint.motorSpeed = dir * min(50.0 * val, 3.0 * self.random_factor_max_steer_step)
 
             # Position => friction_limit
             grass = True
-            friction_limit = self.friction_limit * 0.6  # Grass friction if no tile
+            friction_limit = self.friction_limit * 1  # Grass friction if no tile
             for tile in w.tiles:
                 friction_limit = max(
                     friction_limit, self.friction_limit * tile.road_friction
@@ -223,7 +254,7 @@ class Car:
             if w.brake >= 0.9:
                 w.omega = 0
             elif w.brake > 0:
-                BRAKE_FORCE = 15  # radians per second
+                BRAKE_FORCE = 15 * self.random_factor_brake  # radians per second
                 dir = -np.sign(w.omega)
                 val = BRAKE_FORCE * w.brake
                 if abs(val) > abs(w.omega):
@@ -239,12 +270,12 @@ class Car:
             # But dt is finite, that will lead to oscillations if difference is already near zero.
 
             # Random coefficient to cut oscillations in few steps (have no effect on friction_limit)
-            f_force *= 205000 * SIZE * SIZE
-            p_force *= 205000 * SIZE * SIZE
+            f_force *= 205000 * self.size * self.size
+            p_force *= 205000 * self.size * self.size
             force = np.sqrt(np.square(f_force) + np.square(p_force))
 
             # Skid trace
-            if abs(force) > 2.0 * friction_limit:
+            if False:#abs(force) > 2.0 * friction_limit:
                 if (
                     w.skid_particle
                     and w.skid_particle.grass == grass
@@ -328,10 +359,10 @@ class Car:
                 if s2 > 0:
                     c2 = np.sign(c2)
                 white_poly = [
-                    (-WHEEL_W * SIZE, +WHEEL_R * c1 * SIZE),
-                    (+WHEEL_W * SIZE, +WHEEL_R * c1 * SIZE),
-                    (+WHEEL_W * SIZE, +WHEEL_R * c2 * SIZE),
-                    (-WHEEL_W * SIZE, +WHEEL_R * c2 * SIZE),
+                    (-self.wheel_w* self.size, +self.wheel_r * c1 * self.size),
+                    (+self.wheel_w* self.size, +self.wheel_r * c1 * self.size),
+                    (+self.wheel_w* self.size, +self.wheel_r * c2 * self.size),
+                    (-self.wheel_w* self.size, +self.wheel_r * c2 * self.size),
                 ]
                 white_poly = [trans * v for v in white_poly]
 
