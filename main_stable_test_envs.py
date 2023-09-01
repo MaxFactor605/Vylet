@@ -5,6 +5,7 @@ import os
 import json
 import numpy as np
 import keyboard
+import sys
 import math
 import time
 import matplotlib.pyplot as plt 
@@ -85,7 +86,7 @@ def init_env(env_id):
     
     def init():
 
-        env = CarRacing( full_randomize=False, determined_randomize=False,continuous=True, custom_continuous=False, noise = noise, rad = rad, checkpoints = check, right = right, car_randomize_factor=0.5)
+        env = CarRacing(render_mode="human", random_trase=False, full_randomize=False, determined_randomize=False,continuous=True, custom_continuous=False, noise = noise, rad = rad, checkpoints = check, right = right, car_randomize_factor=0.5)
         env.reset()
         return env
     return init
@@ -103,7 +104,7 @@ if __name__ == '__main__':
         share_features_extractor = True,
     )
 
-    model_dir = './model_ppo_stable_envs_Cont_big_bet'
+    model_dir = '.'
     screenshot_dir = "./screen_test"
     if not os.path.exists(model_dir):
         os.mkdir(model_dir)
@@ -120,15 +121,15 @@ if __name__ == '__main__':
     
 
 
-    steps = 48_000_000 
+    steps = 54_000_000 
     #Load previous logs
-    if os.path.exists("./rewards_true7.npy"):
-        rewards = np.load("./rewards_true7.npy").tolist()
+    if os.path.exists("./rewards_true8sdfe.npy"):
+        rewards = np.load("./rewards_true8.npy").tolist()
         print("Logs rew loaded!")
     else:
         rewards = []
-    if os.path.exists("./percents_true7.npy"): 
-        percents = np.load("./percents_true7.npy").tolist()
+    if os.path.exists("./percents_trsdfue8.npy"): 
+        percents = np.load("./percents_true8.npy").tolist()
         print("Logs perc loaded!")
     else:
         percents = []
@@ -136,7 +137,7 @@ if __name__ == '__main__':
     for t in range(0, 200):
         perc_per_check = {2:[], 3:[], 4:[], 5:[], 6:[], 7:[], 8:[], 19:[]}
         reward_per_check = {2:[], 3:[], 4:[], 5:[], 6:[], 7:[], 8:[], 19:[]}
-        for ep in range(4, 5):
+        for ep in range(0, 32):
 
             try:
                 env = init_env(ep)()
@@ -186,6 +187,7 @@ if __name__ == '__main__':
                 perc_per_check[check].append(env.tile_visited_count/len(env.track))
                 reward_per_check[check].append(score)
             except KeyboardInterrupt:
+                sys.exit()
                 print("Skipped")
         steps += 500_000
 
@@ -200,15 +202,15 @@ if __name__ == '__main__':
         # plot and save results
         percents_np = np.array(percents)
         rewards_np = np.array(rewards)
-        #np.save("./percents_true7", percents_np)
-        #np.save("./rewards_true7", rewards_np)
+        np.save("./percents_true8", percents_np)
+        np.save("./rewards_true8", rewards_np)
 
 
         fig, ax = plt.subplots(nrows=1,ncols=1)
         for j in range(8):
             ax.plot(np.array(range(len(rewards_np))) * 500_000 + 500_000, rewards_np[:, j], color = COLORS[j], label="env_id-{}".format(j))
         ax.legend()
-        #fig.savefig("plot_rewards_true7")
+        fig.savefig("plot_rewards_true8")
         plt.close(fig)
 
 
@@ -216,7 +218,7 @@ if __name__ == '__main__':
         for j in range(8):
             ax.plot(np.array(range(len(percents_np))) * 500_000 + 500_000, percents_np[:,j], color = COLORS[j], label="env_id-{}".format(j))
         ax.legend()
-        #fig.savefig("plot_percents_true7")
+        fig.savefig("plot_percents_true8")
         plt.close(fig)
 
         

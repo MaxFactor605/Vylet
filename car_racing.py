@@ -203,8 +203,9 @@ class CarRacing(gym.Env, EzPickle):
         rad: float = 140, 
         right: bool = False,
         custom_continuous: bool = False,
-        random_trase: bool = False,
-        car_randomize_factor: float = 0
+        random_trase: bool = True,
+        car_randomize_factor: float = 0,
+        draw_trace: bool = False
     ):
         EzPickle.__init__(
             self,
@@ -243,6 +244,7 @@ class CarRacing(gym.Env, EzPickle):
         self.random_trase = random_trase
         self.car_randomize_factor = car_randomize_factor
         self.path = []
+        self.draw_trace = draw_trace
         # This will throw a warning in tests/envs/test_envs in utils/env_checker.py as the space is not symmetric
         #   or normalised however this is not possible here so ignore
         if self.continuous:
@@ -311,7 +313,8 @@ class CarRacing(gym.Env, EzPickle):
 
     def _create_track(self):
         CHECKPOINTS = self.checkpoints
-        
+        if self.random_trase:
+            CHECKPOINTS = np.random.randint(2, 20)
         # Create checkpoints
         checkpoints = []
         for c in range(CHECKPOINTS):
@@ -742,7 +745,7 @@ class CarRacing(gym.Env, EzPickle):
             #print(h/10, step_reward)
             #if np.sign(self.car.hull.angularVelocity) != np.sign(self.prev_angular_velocity):
             #    print("uuuuu", self.t)
-            if(h > 2*TRACK_WIDTH):
+            if(h > 1.5*TRACK_WIDTH):
                 step_reward -= 500
                 done = True
             #print("X: {} Y: {} prev_X: {} prev_Y: {} h: {}".format(x, y, self.prev_x, self.prev_y, h))
@@ -754,14 +757,15 @@ class CarRacing(gym.Env, EzPickle):
             #print("{:.2f}\t{:.2f}\t{:.2f}".format(math.sqrt(self.car.hull.linearVelocity[0]**2 + self.car.hull.linearVelocity[1]**2), self.car.hull.angularVelocity, step_reward))
             #print(self.car.hull.angularDamping)
             #step_reward -= self.inactive_mult
-            if self.inactive_mult > 200:
+            if self.inactive_mult > 150:
                 step_reward -= 500
                 done = True
             self.prev_x = x
             self.prev_y = y
             self.prev_angular_velocity = self.car.hull.angularVelocity
             self.prev_h = h
-            self.path.append([(x,y), (x+1, y) ,(x+1,y+1), (x,y+1)])
+            if self.draw_trace:
+                self.path.append([(x,y), (x+1, y) ,(x+1,y+1), (x,y+1)])
             #print(x,y)
         #print(self.tile_visited_count/len(self.track))
         if self.render_mode == "human":
@@ -780,7 +784,7 @@ class CarRacing(gym.Env, EzPickle):
             return self._render(self.render_mode if render_mode is None else render_mode)
 
     def take_screenshot(self):
-        return self._render("rgb_array", 0.7)
+        return self._render("rgb_array", 0.3)
     
     def _render(self, mode: str, zoom = ZOOM):
         assert mode in self.metadata["render_modes"]
@@ -887,9 +891,11 @@ class CarRacing(gym.Env, EzPickle):
             #print(poly)
             color = [int(c) for c in color]
             self._draw_colored_polygon(self.surf, poly, color, zoom, translation, angle)
-        for poly in self.path:
-            poly = [(p[0], p[1]) for p in poly]
-            self._draw_colored_polygon(self.surf, poly, [255,255, 255], zoom, translation, angle)
+        
+        if self.draw_trace:
+            for poly in self.path:
+                poly = [(p[0], p[1]) for p in poly]
+                self._draw_colored_polygon(self.surf, poly, [255,255, 255], zoom, translation, angle)
 
     def _render_indicators(self, W, H):
         s = W / 40.0
