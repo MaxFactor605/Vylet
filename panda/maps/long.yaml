@@ -1,0 +1,9 @@
+tiles:
+  - [tile, tile  , tile     ,tile     ,tile     ,tile     ,tile     ,tile     ,tile     ,tile     ,tile     ,tile     ,tile     , tile   , tile]
+  - [tile, turn_fr, straight_r,straight_r,straight_r,straight_r,straight_r,straight_r,straight_r,straight_r,straight_r,straight_r,straight_r, turn_fl, tile]
+  - [tile, straight/start, tile     ,tile     ,tile     ,tile     ,tile     ,tile     ,tile     ,tile     ,tile     ,tile     ,tile     , straight   , tile]
+  - [tile, turn_br, straight_r,straight_r,straight_r,straight_r,straight_r,straight_r,straight_r,straight_r,straight_r,straight_r,straight_r, turn_bl, tile]
+  - [tile, tile  , tile     ,tile     ,tile     ,tile     ,tile     ,tile     ,tile     ,tile     ,tile     ,tile     ,tile     , tile   , tile]
+
+
+path_length: 28

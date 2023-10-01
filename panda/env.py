@@ -34,16 +34,22 @@ from panda3d.bullet import ZUp
 
 
 TILES_DIR = "./tiles"
-MAP_MULT = 2
+MAPS_DIR = "./maps"
+MAP_MULT = 1.5
 TILE_WIDTH = 10
 TILE_LENGTH = 10
 TILE_HEIGTH = 2
+CAMERA_HEIGHT = 2
+CAMERA_ANGLE = 70
+RENDER_CAMERA_FOV = 40
+CAR_CAMERA_FOV = 40
 
 OBS_SIZE = 128
 
 M_MAT = np.array([[1, -2, 1],
                   [-2, 2, 0],
                   [1,  0, 0]])
+
 
 class Tile():
     def __init__(self, name, node_path, is_drivable, bazier_curves, x, y):
@@ -53,18 +59,30 @@ class Tile():
         self.bazier_curves = bazier_curves
         self.x = x
         self.y = y
+        self.visited = 0
+
+
+    def set_visited(self, val):
+        if self.is_drivable:
+            self.visited = val
 
 class MyEnv(gym.Env):
-    def __init__(self, render_mode = None, view_mode = "back-follow"):
-        
-        
+    def __init__(self, render_mode = None, view_mode = "first-person", map_file = "./test_map.yaml", frame_skip = 1, max_n_steps = 1024, light_rand = True):
         self.start_tile = None
         self.num_steps = 0
         self.render_mode = render_mode
         self.view_mode = view_mode
+        self.frame_skip = frame_skip
+        self.max_n_steps = max_n_steps
+        self.tiles_visited = 0
+        self.complete_percent = 0.0
+        self.lightRandomization = light_rand
+        self.current_tile = None
+        self.current_curve = None
 
         if render_mode == "human":
             self.base = ShowBase(windowType="onscreen")
+            self.base.cam.node().getLens().setFov(RENDER_CAMERA_FOV)
         else:
             self.base = ShowBase(windowType="offscreen")
 
@@ -73,17 +91,19 @@ class MyEnv(gym.Env):
         self.action_space = spaces.Box(np.array([0, -1, 0]), np.array([+1,+1,+1]))
         
         self.addOffScreenRender()
-        
+        #self.debugNP.hide()
+
         self.addWorld()
 
         self.addLight()
 
-        self.generate_tiles("./test_map.yaml")
+        self.generate_tiles(map_file)
 
-        self.addVechicle()
+        self.addVehicle()
         if render_mode == "human":
             if view_mode == 'up-down':
-                self.base.cam.setPos(self.map_width*(TILE_WIDTH*MAP_MULT)/2, self.map_length*(TILE_LENGTH*MAP_MULT)/2, 200)
+                self.base.cam.setPos(self.map_width*(TILE_WIDTH*MAP_MULT)/2, self.map_length*(TILE_LENGTH*MAP_MULT)/2, (self.map_width*(TILE_WIDTH*MAP_MULT)/2)/math.tan((RENDER_CAMERA_FOV/720)*math.pi)/2)
+                #print(self.map_width*(TILE_WIDTH*MAP_MULT)/2, self.map_width, )
                 self.base.cam.lookAt(self.map_width*(TILE_WIDTH*MAP_MULT)/2, self.map_length*(TILE_LENGTH*MAP_MULT)/2, 0)
             elif view_mode == 'back':
                 self.base.cam.setPos(self.map_width*(TILE_WIDTH*MAP_MULT)/2, -50, 20)
@@ -92,6 +112,10 @@ class MyEnv(gym.Env):
                 self.base.cam.reparentTo(self.VehicleNP)
                 self.base.cam.setPos(0.5, -10, 3)
                 self.base.cam.lookAt(0, 0, 1)
+            elif view_mode == "first-person":
+                self.base.cam.reparentTo(self.VehicleNP)
+                self.base.cam.setPos(0,0,CAMERA_HEIGHT)
+                self.base.cam.lookAt(0,CAMERA_HEIGHT * math.tan((CAMERA_ANGLE/360)*(2*math.pi)),0)
         if self.start_tile is None:
             raise Exception("Start not specified")
         
@@ -107,25 +131,41 @@ class MyEnv(gym.Env):
             
 
         
-    def addLight(self):
-        alight = AmbientLight('ambientLight')
-        alight.setColor(Vec4(0.5, 0.5, 0.5, 1))
-        alightNP = self.base.render.attachNewNode(alight)
+    def addLight(self, reset = False):
+        if self.lightRandomization:
+            color_factor = np.random.uniform(low = 0.05, high = 2)
+            temp_factor = np.random.uniform(low = 0.05, high = 3)
+        else:
+            color_factor = 1
+            temp_factor = 1
+        l = 0.7 * color_factor
+        t = 6500 * temp_factor
+        
+       
+        self.alight = AmbientLight('ambientLight')
+        self.alight.setColor(Vec4(l, l, l, 1))
+        self.alight.setColorTemperature(t)
+      
+        self.alightNP = self.base.render.attachNewNode(self.alight)
 
-        dlight = DirectionalLight('directionalLight')
-        dlight.setDirection(Vec3(1, 1, -1))
-        dlight.setColor(Vec4(0.7, 0.7, 0.7, 1))
-        dlightNP = self.base.render.attachNewNode(dlight)
+       
+        self.dlight = DirectionalLight('directionalLight')
+        #dlight.setDirection(Vec3(1, 1, 10))
+        self.dlight.setColor(Vec4(l, l, l, 1))
+        self.dlight.setColorTemperature(t)
+      
+        self.dlightNP = self.base.render.attachNewNode(self.dlight)
+        self.dlightNP.setHpr(0, -60, 0)
 
         self.base.render.clearLight()
-        self.base.render.setLight(alightNP)
-        self.base.render.setLight(dlightNP)
+        self.base.render.setLight(self.alightNP)
+        self.base.render.setLight(self.dlightNP)
 
     def addWorld(self):
         self.worldNP = self.base.render.attachNewNode('World')
         
         self.debugNP = self.worldNP.attachNewNode(BulletDebugNode('Debug'))
-        self.debugNP.show()
+        #self.debugNP.show()
 
         self.world = BulletWorld()
         self.world.setGravity(Vec3(0, 0, -9.81))
@@ -146,13 +186,13 @@ class MyEnv(gym.Env):
         fb_prop.setRgbColor(True)
         # Only render RGB with 8 bit for each channel, no alpha channel
         fb_prop.setRgbaBits(8, 8, 8, 0)
-        fb_prop.setDepthBits(16)
+        fb_prop.setDepthBits(24)
 
         # Create window properties
         win_prop = WindowProperties.size(OBS_SIZE, OBS_SIZE)
 
         # Create window (offscreen)
-        window = self.base.graphicsEngine.makeOutput(self.base.pipe, "cameraview", -100, fb_prop, win_prop, GraphicsPipe.BFRefuseWindow)
+        window = self.base.graphicsEngine.makeOutput(self.base.pipe, "cameraview", 0, fb_prop, win_prop, GraphicsPipe.BFRefuseWindow)
         #lens = PerspectiveLens()
         #lens.set_fov(45)  # Set the field of view to 90 degrees
         #lens.set_near(1.0)  # Set the near clipping plane
@@ -170,14 +210,14 @@ class MyEnv(gym.Env):
         self.bgr_tex = Texture()
         window.addRenderTexture(self.bgr_tex, GraphicsOutput.RTMCopyRam, GraphicsOutput.RTPColor)
 
-    def addVechicle(self):
+    def addVehicle(self):
 
         shape = BulletBoxShape(Vec3(0.6, 1.4, 0.5))
         ts = TransformState.makePos(Point3(0, 0, 0.5))
 
         self.VehicleNP = self.worldNP.attachNewNode(BulletRigidBodyNode('Vehicle'))
         self.VehicleNP.node().addShape(shape, ts)
-        self.VehicleNP.setPos(self.start_tile.x + TILE_LENGTH/2*MAP_MULT, self.start_tile.y  + TILE_WIDTH/2 * MAP_MULT, TILE_HEIGTH*MAP_MULT)
+        self.VehicleNP.setPos(self.start_tile.x + TILE_LENGTH/2*MAP_MULT, self.start_tile.y  + TILE_WIDTH/2 * MAP_MULT, 3)
         self.VehicleNP.node().setMass(800.0)
         self.VehicleNP.node().setDeactivationEnabled(False)
 
@@ -193,8 +233,9 @@ class MyEnv(gym.Env):
         self.yugoNP = self.base.loader.loadModel('bullet-samples/models/yugo/yugo.egg')
         self.yugoNP.reparentTo(self.VehicleNP)
         self.CarCamNp.reparentTo(self.VehicleNP)
-        self.CarCamNp.setPos(0.5, 5, 3)
-        self.CarCamNp.lookAt(0, 10, 1)
+        self.CarCamNp.setPos(0.0, 0.0, CAMERA_HEIGHT)
+        self.CarCamNp.lookAt(0, CAMERA_HEIGHT * math.tan((CAMERA_ANGLE/360)*(2*math.pi)), 0)
+        self.CarCamNp.node().getLens().setFov(CAR_CAMERA_FOV)
 
         # Right front wheel
         np = self.base.loader.loadModel('bullet-samples/models/yugo/yugotireR.egg')
@@ -224,6 +265,8 @@ class MyEnv(gym.Env):
         self.maxEngineForce = 1000
         self.maxBrakeForce = 100
 
+        self.vehicle_starting_transform = self.VehicleNP.get_transform()
+
     def addWheel(self, pos, front, np):
         wheel = self.vehicle.createWheel()
 
@@ -243,20 +286,22 @@ class MyEnv(gym.Env):
         wheel.setRollInfluence(0.1)
 
     def generate_tiles(self, map_filename = None):
-        
+        self.mapNP = NodePath("Map")
+        self.mapNP.reparentTo(self.ground)
         assert map_filename is not None
         
         with open(map_filename, "r") as file:
             map_yaml = yaml.safe_load(file)
         
-        self.map_width = len(map_yaml["tiles"])
-        self.map_length = len(map_yaml["tiles"][0])
-        y = (self.map_width-1) * TILE_LENGTH * MAP_MULT
+        self.map_width = len(map_yaml["tiles"][0])
+        self.map_length = len(map_yaml["tiles"])
+        self.path_length = map_yaml["path_length"]
+        y = (self.map_length-1) * TILE_LENGTH * MAP_MULT
         
         self.tiles = []
          
         for row in map_yaml["tiles"]:
-            if len(row) != self.map_length:
+            if len(row) != self.map_width:
                 raise IndexError
             x = 0
             row_tiles = []
@@ -266,10 +311,13 @@ class MyEnv(gym.Env):
                 else:
                     specs = None
                 tile = self.base.loader.loadModel(TILES_DIR + "/{}".format(tile_name) + "/plane_{}.glb".format(tile_name))
-                tile.reparentTo(self.ground)
+                tile.reparentTo(self.mapNP)
                 # Apply scale and position transforms on the model.
-                tile.setScale(MAP_MULT, MAP_MULT, MAP_MULT)
-                tile.setPos(x, y,-1 * MAP_MULT)
+                #tile.setHpr(tile, Vec3(0, 90, 0))
+
+                tile.setScale(MAP_MULT, MAP_MULT, 1)
+                tile.setPos(x, y,-1)
+
                 with open(TILES_DIR + "/{}/conf.yaml".format(tile_name), "r") as file:
                     conf_yaml = yaml.safe_load(file)
 
@@ -284,6 +332,7 @@ class MyEnv(gym.Env):
                 if specs is not None:
                     if specs == "start":
                         self.start_tile = row_tiles[-1]
+                        #print(self.start_tile.x, self.start_tile.y)
                 x += TILE_WIDTH * MAP_MULT
             self.tiles = [row_tiles, *self.tiles]
             y -= TILE_LENGTH * MAP_MULT
@@ -325,10 +374,10 @@ class MyEnv(gym.Env):
         dir = np.clip(dir, -1.0, +1.0)
         return min_dist, dir
     
-    def computeReward(self, current_tile, car_x, car_y):
+    def computeReward(self, current_tile, car_x, car_y, tile_change):
         if(current_tile.bazier_curves is not None):
             max_dir = -2
-            current_curve = None
+            current_curve_t = None
             actual_dist = 0
             for curve in current_tile.bazier_curves:
                 curve = curve.copy()
@@ -337,36 +386,116 @@ class MyEnv(gym.Env):
                 dist, dir = self.get_distance_and_dir(curve, car_x, car_y, self.vehicle.forward_vector)
                 if (dir > max_dir):
                     max_dir = dir
-                    current_curve = curve
+                    current_curve_t = curve
                     actual_dist = dist
 
-            reward = -actual_dist/10 + max_dir
-            print("{:.3f}, {:.3f}".format(actual_dist, max_dir))
+            reward = -actual_dist/1.5 + max_dir/2
+            if self.num_steps > 100:
+                reward += min(self.vehicle.getCurrentSpeedKmHour() - 20, 0)/5
+            if not tile_change and (current_curve_t != self.current_curve).any():
+                reward -= 100
+                #print("Curve changed!")
+            self.current_curve = current_curve_t
+           # print("{:.3f}, {:.3f}".format(actual_dist, max_dir))
         else:
             raise Exception("Current tile is drivable but curves not found")
    
         return reward
-    
-    def step(self, action):
+    def reset(self, seed = None, map_file = None):
+        if not map_file is None:
+            self.mapNP.removeNode()
+            self.generate_tiles(map_file)
+        else:
+            for row in self.tiles:
+                for tile in row:    
+                    if tile.is_drivable:
+                        tile.set_visited(0)
+
+        if self.lightRandomization:
+            if np.random.random() < 0.5:
+                color_factor = np.random.uniform(low = 1/5, high = 1)
+                l = 0.5 * color_factor
+                self.alight.setColor(Vec4(l, l, l, 1))
+                self.dlight.setColor(Vec4(l, l, l, 1))
+            else:
+                temp_factor = np.random.uniform(low = 0.1, high = 3)
+                t = 6500 * temp_factor
+                self.alight.setColorTemperature(t)
+                self.dlight.setColorTemperature(t)
+            color_factor = 1
+            temp_factor = 1
+        self.VehicleNP.set_transform(self.vehicle_starting_transform)
+        zeroVector = Vec3(0,0,0)
+        self.VehicleNP.setPos(self.start_tile.x + TILE_LENGTH/2*MAP_MULT, self.start_tile.y  + TILE_WIDTH/2 * MAP_MULT, 3)
+        self.steering = 0.0
+        self.num_steps = 0
+        self.tiles_visited = 0
+        self.complete_percent = 0.0
+        self.vehicle.applyEngineForce(0, 0);
+        self.vehicle.applyEngineForce(0, 1);
+        self.vehicle.setBrake(0, 0);
+        self.vehicle.setBrake(0, 1);
+        self.vehicle.setSteeringValue(self.steering, 0);
+        self.vehicle.setSteeringValue(self.steering, 1);
+        for wheel in self.vehicle.getWheels():
+            wheel.setRotation(0.0)
+        self.vehicle.chassis.setLinearVelocity(zeroVector)
+        self.vehicle.chassis.setAngularVelocity(zeroVector)
+        self.vehicle.chassis.clearForces()
+        if self.render_mode == "human":
+            if self.view_mode == 'up-down':
+                self.base.cam.setPos(self.map_width*(TILE_WIDTH*MAP_MULT)/2, self.map_length*(TILE_LENGTH*MAP_MULT)/2, (self.map_width*(TILE_WIDTH*MAP_MULT)/2)/math.tan((RENDER_CAMERA_FOV/720)*math.pi)/2)
+                #print(self.map_width*(TILE_WIDTH*MAP_MULT)/2, self.map_width, )
+                self.base.cam.lookAt(self.map_width*(TILE_WIDTH*MAP_MULT)/2, self.map_length*(TILE_LENGTH*MAP_MULT)/2, 0)
+            elif self.view_mode == 'back':
+                self.base.cam.setPos(self.map_width*(TILE_WIDTH*MAP_MULT)/2, -50, 20)
+                self.base.cam.lookAt(self.map_width*(TILE_WIDTH*MAP_MULT)/2, self.map_length*(TILE_LENGTH*MAP_MULT)/2, 0)
+        
+        return self.step(), {}
+
+
+    def step(self, action = None):
         self.base.taskMgr.step()
-        dt = globalClock.getDt()
+        dt = 0.02 #globalClock.getDt()
+       # print(dt)
         done = False
         reward = 0
-        self.processInput(dt, action)
-        self.world.doPhysics(dt, 10, 0.008)
-        car_x, car_y, car_z = self.yugoNP.getPos(self.worldNP)
-        if self.render_mode == "human":
-            if self.view_mode == "up-down-follow":
-                self.base.cam.setPos(car_x, car_y, 30)
-                self.base.cam.lookAt(car_x, car_y, 0)
-        current_tile = self.tiles[int(car_y//(TILE_LENGTH*MAP_MULT))][int(car_x//(TILE_WIDTH*MAP_MULT))]
-        if current_tile.is_drivable:
-            reward = self.computeReward(current_tile, car_x, car_y)
-
-        else:
-            reward = -1000
-            done = True
-        
+        steering_sign = np.sign(self.steering)
+        if action is not None:
+            self.processInput(dt, action)
+            self.world.doPhysics(dt, 10, 0.008)
+            if self.frame_skip is not None:
+                for i in range(self.frame_skip):
+                    self.base.taskMgr.step()
+                    dt = globalClock.getDt()
+                    self.world.doPhysics(dt, 10, 0.008)
+            car_x, car_y, car_z = self.yugoNP.getPos(self.worldNP)
+            if self.render_mode == "human":
+                if self.view_mode == "up-down-follow":
+                    self.base.cam.setPos(car_x, car_y, 30)
+                    self.base.cam.lookAt(car_x, car_y, 0)
+            current_tile_t = self.tiles[int(car_y//(TILE_LENGTH*MAP_MULT))][int(car_x//(TILE_WIDTH*MAP_MULT))]
+            tile_change = current_tile_t != self.current_tile
+            self.current_tile = current_tile_t
+            #print(current_tile.name, self.vehicle.forward_vector)
+            if not self.current_tile.is_drivable:
+                reward = -500
+                done = True
+            elif (abs(self.vehicle.forward_vector[2])) > 0.1:
+                reward = -500
+                done = True
+            else:
+                reward = self.computeReward(self.current_tile, car_x, car_y, tile_change)
+                if np.sign(self.steering) != steering_sign:
+                    reward -= 1
+                if not self.current_tile.visited:
+                    self.tiles_visited += 1
+                    self.complete_percent = self.tiles_visited/self.path_length
+                    self.current_tile.set_visited(1)
+                    reward += 20
+                if self.num_steps == self.max_n_steps or self.complete_percent == 1.0:
+                    done = True
+        #print(self.vehicle.getCurrentSpeedKmHour())
 
         self.base.graphicsEngine.renderFrame()
 
@@ -376,21 +505,21 @@ class MyEnv(gym.Env):
 
         bgr_img = bgr_img.copy()
         bgr_img = np.flipud(bgr_img[..., [2, 1, 0]])
-        #if not os.path.exists("./Testing_shots"):
-        #    os.mkdir("./Testing_shots")
+       # if not os.path.exists("./Testing_shots"):
+       #     os.mkdir("./Testing_shots")
         
 
-        #img = Image.fromarray(bgr_img)
-        #img = img.rotate(180)
+       # img = Image.fromarray(bgr_img)
         
-        #if self.num_steps % 10 == 0:
-         #   img.save("./Testing_shots/test{}.jpg".format(self.num_steps))
-        #print("{} x: {:.3f} y: {:.3f} dist: {:.3f} tile_x: {} tile_y: {} dir: {:.3f}".format(current_tile.name, car_x, car_y, actual_dist if actual_dist is not None else 0.0, current_tile.x, current_tile.y,
-        #                                                                                     max_dir if max_dir is not None else 0.0))
         
+       # if self.num_steps % 10 == 0:
+       #     img.save("./Testing_shots/test{}.jpg".format(self.num_steps))
+        #print(reward)
         self.num_steps += 1
-       
-        return bgr_img, reward, done, done, {}
+        if action is None:
+            return bgr_img
+        else:
+            return bgr_img, reward, done, done, {"completeness":self.complete_percent}
 
     def processInput(self, dt, action):
         engineForce = self.maxEngineForce * action[0]
@@ -417,6 +546,8 @@ class MyEnv(gym.Env):
         self.cleanup()
         sys.exit(1)
 
+    
+
     def doReset(self):
         self.cleanup()
         self.setup()
@@ -441,16 +572,23 @@ class MyEnv(gym.Env):
 
 
 if __name__ == "__main__":
+    maps = ["round", "round-grass", "round-r", "round-grass-r", "curvy", "curvy-r", "long", "long-r", "big", "big-r",
+            "zig-zag", "zig-zag-r", "plus", "plus-r", "H", "H-r"]
+    i = 1
+    app = MyEnv(render_mode = "human",view_mode="back-follow", map_file = "./{}/{}.yaml".format(MAPS_DIR, maps[0]), max_n_steps=5)
     
-    app = MyEnv(render_mode="human")
     inputState.watchWithModifiers('forward', 'w')
     #inputState.watchWithModifiers('left', 'a')
     inputState.watchWithModifiers('reverse', 's')
     #inputState.watchWithModifiers('right', 'd')
     inputState.watchWithModifiers('turnLeft', 'a')
     inputState.watchWithModifiers('turnRight', 'd')
+    inputState.watchWithModifiers('skip', "z")
+    step = 0
     while True:
         action = [0, 0, 0]
+        
+
         if inputState.isSet('forward'):
             action[0] = 1
 
@@ -464,9 +602,18 @@ if __name__ == "__main__":
             action[1] = -1
 
         obs, reward, done, _, _ = app.step(action)
-        #print(reward)
+        print(step ,reward)
+        if inputState.isSet("skip"):
+            if step > 3:
+                done = True
         if done:
-            break
+            #print(i, maps[i])
+            app.reset("{}/{}.yaml".format(MAPS_DIR, maps[i]))
+            i += 1
+            step = 0
+        if i == len(maps):
+            i = 0
+        step += 1
 
 
 
