@@ -16,6 +16,8 @@ from stable_baselines3.common.policies import ActorCriticCnnPolicy
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from sb3_contrib.common.recurrent.policies import RecurrentActorCriticCnnPolicy
 from PIL import Image
+from callbacks import TensorboardCallback, VideoRecorderCallback, EvalCallback
+from stable_baselines3.common.callbacks import CallbackList
 
 
 
@@ -32,6 +34,10 @@ MAPS = ["round", "round-grass", "round-r", "round-grass-r", "curvy", "curvy-r", 
             "zig-zag", "zig-zag-r", "plus", "plus-r", "H", "H-r"]
 
 MAPS_DIR = "./maps"
+DEVICE = "cuda:1" if torch.cuda.is_available() else "cpu"
+EPISODE_TIME = 3125
+
+NUM_ENVS = 16
 class CustomCNN(BaseFeaturesExtractor):
     """
     :param observation_space: (gym.Space)
@@ -69,12 +75,32 @@ class CustomCNN(BaseFeaturesExtractor):
         #print(observations.shape)
         return self.linear(self.cnn(observations))
 
+class PreloadFE(BaseFeaturesExtractor):
+
+
+    def __init__(self, observation_space: spaces.Box, model_file, fixed, device, features_dim: int = 64):
+        super().__init__(observation_space, features_dim)
+
+        self.FE = CustomCNN(observation_space, features_dim)
+        print(device)
+        self.FE.load_state_dict(torch.load(model_file, map_location=torch.device(device)))
+        print("Feature extractor loaded from {}".format(model_file))
+        if fixed:
+            for p in self.FE.parameters():
+                p.requires_grad = False
+        else:
+            for p in self.FE.parameters():
+                p.requires_grad = True
+
+    def forward(self, observations : torch.Tensor) -> torch.Tensor:
+        return self.FE(observations)
+
 def init_env(env_id):
     #map_name = ["ETH_small_loop_2_bordered", "ETH_large_loop", "ETHZ_loop_bordered", 
     #            "experiment_loop", "loop_empty", "MOOC_modcon", "ETHZ_autolab_technical_track_bordered", "zigzag_dists_bordered"][env_id]
     map_name = MAPS[env_id]
     def init():
-        env = MyEnv(render_mode = None, map_file = "{}/{}.yaml".format(MAPS_DIR, map_name), max_n_steps = 2048, frame_skip = 0)
+        env = MyEnv(render_mode = None, map_file = "{}/{}.yaml".format(MAPS_DIR, map_name), max_n_steps = EPISODE_TIME, frame_skip = 0, light_rand = True)
         
         return env
     return init
@@ -82,13 +108,15 @@ def init_env(env_id):
 
 
 if __name__ == "__main__":
-    model_dir = "model_big_v5"
-    logs_dir = "log_big_v5"
+    version_suff = "v7.1"
+    model_dir = "model_big_"+version_suff
+    logs_dir = "log_big_"+version_suff
+    video_dir = "video_big_"+version_suff
     policy_kwargs = dict(
-        features_extractor_class=CustomCNN,
-        features_extractor_kwargs=dict(features_dim=256), # 512
+        features_extractor_class=PreloadFE,
+        features_extractor_kwargs=dict(model_file = "./FE_model_v0.3/epoch_200", fixed = 0, features_dim=32, device=DEVICE), # 512
         n_lstm_layers=1,
-        lstm_hidden_size = 64, # 256
+        lstm_hidden_size = 16, # 256
         enable_critic_lstm = False,
         shared_lstm = True,
         ortho_init = False,
@@ -102,16 +130,16 @@ if __name__ == "__main__":
     if not os.path.exists(logs_dir + "/tensorboard"):
         os.mkdir(logs_dir + "/tensorboard")
 
-    env = SubprocVecEnv([init_env(env) for env in range(16)])
-    steps = 24_500_000
+    env = SubprocVecEnv([init_env(env) for env in range(NUM_ENVS)])
+    steps = 0
     if os.path.exists(model_dir + "/ppo_{}.zip".format(steps)):
-        model = RecurrentPPO.load(model_dir+"/ppo_{}".format(steps), env = env, device = "cpu" if not torch.has_cuda else "cuda:1", custom_objects={"target_kl":0.02, "learning_rate":1e-5, "max_grad_norm":0.5, "n_steps":2048})
+        model = RecurrentPPO.load(model_dir+"/ppo_{}".format(steps), env = env, device = DEVICE, custom_objects={"target_kl":0.02, "learning_rate":1e-5, "max_grad_norm":0.5, "n_steps":EPISODE_TIME})
         print("ppo_{} - Model loaded".format(steps))
     else:
         
-        model = RecurrentPPO(RecurrentActorCriticCnnPolicy, env, verbose=1,  batch_size = 128, n_steps=1024, normalize_advantage=True,
+        model = RecurrentPPO(RecurrentActorCriticCnnPolicy, env, verbose=1,  batch_size = 128, n_steps=EPISODE_TIME, normalize_advantage=True,
             max_grad_norm=0.5, policy_kwargs=policy_kwargs, n_epochs = 10, ent_coef=0.01,
-            learning_rate=1e-5, device= "cpu" if not torch.has_cuda else "cuda:3", target_kl = 0.02, tensorboard_log = logs_dir + "/tensorboard", use_sde = False)#, sde_sample_freq = 64)
+            learning_rate=1e-5, device= DEVICE, target_kl = 0.02, tensorboard_log = logs_dir + "/tensorboard", use_sde = False)#, sde_sample_freq = 64)
 
     TIMESTEPS = 500_000
 
@@ -129,9 +157,16 @@ if __name__ == "__main__":
 
     
 
-    test_env = init_env(0)()
-    for epoch in range(1, 151):
-        model.learn(TIMESTEPS, reset_num_timesteps=False, progress_bar=True, log_interval=6)
+    
+    while True:
+        print(version_suff)
+        if (steps+TIMESTEPS) % 5_000_000 == 0:
+            print("Video record")
+            model.learn(TIMESTEPS, reset_num_timesteps=False, progress_bar=True, log_interval=6, callback=CallbackList([TensorboardCallback(num_envs=NUM_ENVS),
+                                                                                                                        VideoRecorderCallback(EPISODE_TIME, video_dir + "/ppo_{}".format(steps+TIMESTEPS), num_envs=NUM_ENVS),
+                                                                                                                        EvalCallback(EPISODE_TIME, NUM_ENVS, 5, logs_dir)]))
+        else:
+            model.learn(TIMESTEPS, reset_num_timesteps=False, progress_bar=True, log_interval=6, callback=CallbackList([TensorboardCallback(num_envs=NUM_ENVS), EvalCallback(EPISODE_TIME, NUM_ENVS, 5, logs_dir)]))
         steps += TIMESTEPS
         model.save(model_dir+"/ppo_{}".format(steps))
         gc.collect()
