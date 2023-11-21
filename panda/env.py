@@ -132,14 +132,9 @@ class MyEnv(gym.Env):
 
         
     def addLight(self, reset = False):
-        if self.lightRandomization:
-            color_factor = np.random.uniform(low = 0.05, high = 2)
-            temp_factor = np.random.uniform(low = 0.05, high = 3)
-        else:
-            color_factor = 1
-            temp_factor = 1
-        l = 0.7 * color_factor
-        t = 6500 * temp_factor
+    
+        l = 0.7
+        t = 6500
         
        
         self.alight = AmbientLight('ambientLight')
@@ -310,6 +305,8 @@ class MyEnv(gym.Env):
                     tile_name, specs = tile_name.split("/")
                 else:
                     specs = None
+                if tile_name == "random":
+                    tile_name = np.random.choice(os.listdir(TILES_DIR))
                 tile = self.base.loader.loadModel(TILES_DIR + "/{}".format(tile_name) + "/plane_{}.glb".format(tile_name))
                 tile.reparentTo(self.mapNP)
                 # Apply scale and position transforms on the model.
@@ -401,7 +398,7 @@ class MyEnv(gym.Env):
             raise Exception("Current tile is drivable but curves not found")
    
         return reward
-    def reset(self, seed = None, map_file = None):
+    def reset(self, seed = None, map_file = None, light_color_factor = None, light_temp_factor = None, init_angle = 0, init_pos = 0):
         if not map_file is None:
             self.mapNP.removeNode()
             self.generate_tiles(map_file)
@@ -411,22 +408,33 @@ class MyEnv(gym.Env):
                     if tile.is_drivable:
                         tile.set_visited(0)
 
-        if self.lightRandomization:
-            if np.random.random() < 0.5:
-                color_factor = np.random.uniform(low = 1/5, high = 1)
-                l = 0.5 * color_factor
-                self.alight.setColor(Vec4(l, l, l, 1))
-                self.dlight.setColor(Vec4(l, l, l, 1))
-            else:
-                temp_factor = np.random.uniform(low = 0.1, high = 3)
-                t = 6500 * temp_factor
-                self.alight.setColorTemperature(t)
-                self.dlight.setColorTemperature(t)
+        if (light_color_factor is None and light_temp_factor is None):
+            if self.lightRandomization:
+                if np.random.random() < 0.5:
+                    color_factor = np.random.uniform(low = 0.05, high = 0.4)
+                    l = 1 * color_factor
+                    self.alight.setColor(Vec4(l, l, l, 1))
+                    self.dlight.setColor(Vec4(l, l, l, 1))
+                else:
+                    temp_factor = np.random.uniform(low = 0.2, high = 0.6)
+                    t = 6500 * temp_factor
+                    self.alight.setColorTemperature(t)
+                    self.dlight.setColorTemperature(t)
             color_factor = 1
             temp_factor = 1
+        else:
+            if not light_color_factor is None:
+                l = 1 * light_color_factor
+                self.alight.setColor(Vec4(l, l, l, 1))
+                self.dlight.setColor(Vec4(l, l, l, 1))
+            elif not light_temp_factor is None:
+                t = 6500 * light_temp_factor
+                self.alight.setColorTemperature(t)
+                self.dlight.setColorTemperature(t)
+        self.vehicle_starting_transform = self.vehicle_starting_transform.makeHpr(Vec3(init_angle, 0, 0))
         self.VehicleNP.set_transform(self.vehicle_starting_transform)
         zeroVector = Vec3(0,0,0)
-        self.VehicleNP.setPos(self.start_tile.x + TILE_LENGTH/2*MAP_MULT, self.start_tile.y  + TILE_WIDTH/2 * MAP_MULT, 3)
+        self.VehicleNP.setPos(self.start_tile.x + TILE_LENGTH/2*MAP_MULT + init_pos * TILE_LENGTH/5*MAP_MULT, self.start_tile.y  + TILE_WIDTH/2 * MAP_MULT, 3)
         self.steering = 0.0
         self.num_steps = 0
         self.tiles_visited = 0
@@ -575,7 +583,7 @@ if __name__ == "__main__":
     maps = ["round", "round-grass", "round-r", "round-grass-r", "curvy", "curvy-r", "long", "long-r", "big", "big-r",
             "zig-zag", "zig-zag-r", "plus", "plus-r", "H", "H-r"]
     i = 1
-    app = MyEnv(render_mode = "human",view_mode="back-follow", map_file = "./{}/{}.yaml".format(MAPS_DIR, maps[0]), max_n_steps=5)
+    app = MyEnv(render_mode = "human",view_mode="back-follow", map_file = "./{}/{}.yaml".format(MAPS_DIR, maps[0]), max_n_steps=500)
     
     inputState.watchWithModifiers('forward', 'w')
     #inputState.watchWithModifiers('left', 'a')
